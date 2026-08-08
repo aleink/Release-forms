@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json && vite build",
+    "test:security": "node --test supabase/migrations/security-release-remediation.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
