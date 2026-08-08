@@ -6,6 +6,10 @@ const sql = readFileSync(
   new URL("./20260806234253_security_release_remediation.sql", import.meta.url),
   "utf8",
 );
+const vercel = JSON.parse(readFileSync(
+  new URL("../../vercel.json", import.meta.url),
+  "utf8",
+));
 
 test("public submission atomically claims an unused, unexpired link", () => {
   assert.match(sql, /UPDATE public\.release_form_links[\s\S]*used_at IS NULL[\s\S]*RETURNING \* INTO v_link/);
@@ -27,4 +31,11 @@ test("legal context is server-owned and semantic evidence is required", () => {
 test("direct and concurrent inserts retain a one-submission invariant", () => {
   assert.match(sql, /pg_advisory_xact_lock/);
   assert.match(sql, /release_forms_one_submission_per_link_t/);
+});
+
+test("Vercel serves direct client and staff SPA routes", () => {
+  assert.deepEqual(vercel.rewrites, [{
+    source: "/(.*)",
+    destination: "/index.html",
+  }]);
 });
