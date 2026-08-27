@@ -1,7 +1,7 @@
 import { FormEvent, useMemo, useState } from "react";
 import { Lock, Search, ShieldCheck } from "lucide-react";
 import { requirementLocations, staffFieldsFor } from "../data/requirements";
-import { signInStaff } from "../lib/supabase";
+import { isReleaseFormDemoMode, signInStaff } from "../lib/supabase";
 import { mockReleaseForms } from "../lib/mockData";
 
 export function StaffDashboard() {
@@ -15,7 +15,7 @@ export function StaffDashboard() {
 
   const visibleRows = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return mockReleaseForms
+    return (isReleaseFormDemoMode ? mockReleaseForms : [])
       .filter((row) => row.locationId === locationId)
       .filter((row) => !q || row.clientName.toLowerCase().includes(q) || row.id.toLowerCase().includes(q));
   }, [locationId, query]);
@@ -40,11 +40,11 @@ export function StaffDashboard() {
           <h1>Staff login</h1>
           <label className="field">
             <span className="field-label">Email</span>
-            <input name="email" type="email" defaultValue="demo@clubtattoo.com" />
+            <input name="email" type="email" defaultValue={isReleaseFormDemoMode ? "demo@clubtattoo.example" : ""} />
           </label>
           <label className="field">
             <span className="field-label">Password</span>
-            <input name="password" type="password" defaultValue="demo-password" />
+            <input name="password" type="password" defaultValue={isReleaseFormDemoMode ? "demo-password" : ""} />
           </label>
           {authError && <div className="error-banner">{authError}</div>}
           <button className="primary-button" type="submit">Sign in</button>

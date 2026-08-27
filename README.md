@@ -20,6 +20,11 @@ npm run dev
 
 Add the Supabase project URL and publishable anon key to `.env.local` when the new Supabase backend is created.
 
+The app fails closed when those values or a release token are missing. For an
+explicit synthetic demo during local development only, set
+`VITE_RELEASE_FORM_DEMO_MODE=true`. Demo submissions return an in-memory
+synthetic receipt and never persist form payloads in browser storage.
+
 ## Backend Shape
 
 The backend is designed around versioned requirement profiles. Every submitted release form should store the exact requirement version used at signing time, so future edits to New Jersey, Las Vegas, Houston, Miami, or new-location rules do not mutate historical forms.
