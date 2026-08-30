@@ -13,7 +13,7 @@ import {
 } from "../data/requirements";
 import { FieldRenderer } from "../components/FieldRenderer";
 import { ProgressRail } from "../components/ProgressRail";
-import { submitPublicReleaseForm } from "../lib/supabase";
+import { isReleaseFormDemoMode, submitPublicReleaseForm } from "../lib/supabase";
 
 const steps = ["Appointment", "Info", "Health", "Sign"];
 
@@ -21,13 +21,13 @@ const demoAppointment = {
   locationId: "las_vegas",
   serviceType: "tattoo" as ServiceType,
   dateOfService: "2026-05-13",
-  artistName: "Alec",
-  serviceLabel: "Tattoo appointment",
-  bodyArea: "Left forearm",
-  priceSummary: "$450 estimate, deposit on file",
-  firstName: "Noelle",
-  lastName: "Lavigne",
-  phone: "(702) 555-0174",
+  artistName: "Demo Artist",
+  serviceLabel: "Demo tattoo appointment",
+  bodyArea: "Demo placement",
+  priceSummary: "Demo estimate",
+  firstName: "Demo",
+  lastName: "Client",
+  phone: "+1 (555) 010-0100",
 };
 
 const conditionOptions = [
@@ -80,6 +80,8 @@ export function ClientReleaseForm() {
     () => standardDocuments.filter((field) => minor || (!field.id.includes("guardian") && !field.id.includes("minor"))),
     [minor],
   );
+
+  const blockedDemoLink = token === "demo" && !isReleaseFormDemoMode;
 
   const setField = (id: string, value: string | boolean | File | null) => {
     setValues((previous) => ({ ...previous, [id]: value }));
@@ -166,6 +168,18 @@ export function ClientReleaseForm() {
       setSubmitting(false);
     }
   };
+
+  if (blockedDemoLink) {
+    return (
+      <main className="client-shell success-state">
+        <section className="success-panel">
+          <ShieldCheck size={30} />
+          <h1>Release form unavailable</h1>
+          <p>This demo link is disabled. Please request a current release-form link from the studio.</p>
+        </section>
+      </main>
+    );
+  }
 
   if (submittedId) {
     return (
