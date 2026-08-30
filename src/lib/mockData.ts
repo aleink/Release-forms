@@ -14,7 +14,7 @@ export interface ReleaseSubmissionRow {
 export const mockReleaseForms: ReleaseSubmissionRow[] = [
   {
     id: "RF-24018",
-    clientName: "Noelle Lavigne",
+    clientName: "Demo Client 001",
     locationId: "las_vegas",
     locationName: "Las Vegas",
     serviceType: "tattoo",
@@ -24,7 +24,7 @@ export const mockReleaseForms: ReleaseSubmissionRow[] = [
   },
   {
     id: "RF-24017",
-    clientName: "Jordan Ellis",
+    clientName: "Demo Client 002",
     locationId: "miami",
     locationName: "Miami",
     serviceType: "piercing",
@@ -34,7 +34,7 @@ export const mockReleaseForms: ReleaseSubmissionRow[] = [
   },
   {
     id: "RF-24016",
-    clientName: "Taylor Morgan",
+    clientName: "Demo Client 003",
     locationId: "new_jersey",
     locationName: "New Jersey",
     serviceType: "tattoo",
@@ -43,4 +43,3 @@ export const mockReleaseForms: ReleaseSubmissionRow[] = [
     ageAtSubmission: 31,
   },
 ];
-
