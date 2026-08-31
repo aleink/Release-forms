@@ -24,3 +24,18 @@ test("no release payload is persisted in browser storage", () => {
   assert.match(client, /localStorage\.removeItem\(LEGACY_DEMO_STORAGE_KEY\)/);
   assert.match(client, /DEMO-\$\{crypto\.randomUUID\(\)\}/);
 });
+
+test("production responses apply a deny-by-default browser policy", () => {
+  const vercel = readFileSync(new URL("../../vercel.json", import.meta.url), "utf8");
+  assert.match(vercel, /Content-Security-Policy/);
+  assert.match(vercel, /frame-ancestors 'none'/);
+  assert.match(vercel, /Referrer-Policy[^\n]+no-referrer/);
+  assert.match(vercel, /Permissions-Policy/);
+  assert.doesNotMatch(vercel, /unsafe-inline|unsafe-eval/);
+});
+
+test("public and login errors do not expose raw Supabase failures", () => {
+  assert.doesNotMatch(client, /if \(error\) throw error/);
+  assert.match(client, /throw unavailableError\(\)/);
+  assert.match(client, /Email or password is incorrect\./);
+});
