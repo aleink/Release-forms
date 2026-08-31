@@ -56,7 +56,12 @@ export async function submitPublicReleaseForm(token: string | undefined, payload
     p_token: token,
     p_payload: payload,
   });
-  if (error) throw error;
+  if (error) {
+    if (/invalid|expired|already used|already submitted/i.test(String(error.message || ""))) {
+      throw invalidTokenError();
+    }
+    throw unavailableError();
+  }
   return data;
 }
 
@@ -64,6 +69,6 @@ export async function signInStaff(email: string, password: string) {
   if (isReleaseFormDemoMode) return { demo: true as const };
   if (!supabase) throw unavailableError();
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-  if (error) throw error;
+  if (error) throw new Error("Email or password is incorrect.");
   return data;
 }
