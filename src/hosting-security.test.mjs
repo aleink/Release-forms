@@ -49,9 +49,18 @@ test("production provider credentials are fail-closed and excluded from install,
   const jobEnvironmentStart = deployWorkflow.indexOf("    environment: Production");
   const jobStepsStart = deployWorkflow.indexOf("    steps:", jobEnvironmentStart);
   const jobEnvironment = deployWorkflow.slice(jobEnvironmentStart, jobStepsStart);
+  const providerBuildStart = deployWorkflow.indexOf("      - name: Build immutable production artifact");
+  const providerDeployStart = deployWorkflow.indexOf("      - name: Deploy unaliased", providerBuildStart);
+  const providerBuild = deployWorkflow.slice(providerBuildStart, providerDeployStart);
   assert.match(deployWorkflow, /environment: Production\n    env:\n      DEPLOYMENT_ENABLED:/);
   assert.ok(deployWorkflow.indexOf("VERCEL_TOKEN") > deployWorkflow.indexOf("- run: npm run build"));
   assert.match(deployWorkflow, /Production deployment is enabled but Vercel credentials are incomplete/);
   assert.match(deployWorkflow, /echo "::error::Production deployment is enabled[^\n]+\n\s+exit 1/);
   assert.doesNotMatch(jobEnvironment, /VERCEL_(?:TOKEN|ORG_ID|PROJECT_ID)/);
+  assert.match(providerBuild, /vercel@59\.10\.0 build --prod/);
+  assert.doesNotMatch(providerBuild, /VERCEL_(?:TOKEN|ORG_ID|PROJECT_ID)|--token/);
+  assert.match(deployWorkflow, /deploy --prebuilt --prod --skip-domain/);
+  assert.match(deployWorkflow, /vercel@59\.10\.0 curl \/ --deployment "\$deployment_url"/);
+  assert.match(deployWorkflow, /This standalone form is not active\./);
+  assert.match(deployWorkflow, /vercel@59\.10\.0 promote "\$deployment_url" --yes/);
 });
