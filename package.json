@@ -3,10 +3,16 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "packageManager": "npm@10.9.9",
+  "engines": {
+    "node": "22.23.x",
+    "npm": "10.9.x"
+  },
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json && vite build",
-    "test:security": "node --test supabase/migrations/security-release-remediation.test.mjs src/lib/supabase.security.test.mjs",
+    "build": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json && vite build && node scripts/verify-production-artifact.mjs",
+    "test:security": "node --test scripts/verify-production-artifact.test.mjs supabase/migrations/security-release-remediation.test.mjs src/lib/supabase.security.test.mjs src/hosting-security.test.mjs",
+    "ci:secrets": "node scripts/ci/scan-current-tree-credentials.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

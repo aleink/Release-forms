@@ -19,6 +19,12 @@ test("demo mode requires an explicit non-production flag", () => {
   assert.match(form, /token === "demo" && !isReleaseFormDemoMode/);
 });
 
+test("production runtime remains inactive even if provider variables are added", () => {
+  assert.match(client, /isReleaseFormRuntimeActive = import\.meta\.env\.MODE !== "production"/);
+  assert.match(client, /isReleaseFormRuntimeActive && isSupabaseConfigured/);
+  assert.match(app, /if \(!isReleaseFormRuntimeActive\) return <InactiveLanding \/>/);
+});
+
 test("no release payload is persisted in browser storage", () => {
   assert.doesNotMatch(client, /localStorage\.setItem|JSON\.stringify\(\[stored/);
   assert.match(client, /localStorage\.removeItem\(LEGACY_DEMO_STORAGE_KEY\)/);

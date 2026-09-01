@@ -17,6 +17,35 @@ body {
   min-height: 100vh;
 }
 
+.inactive-shell {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.inactive-card {
+  width: min(620px, 100%);
+  padding: clamp(28px, 7vw, 52px);
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.06);
+}
+
+.inactive-card h1 {
+  margin-bottom: 18px;
+  color: #111827;
+  font-size: clamp(1.8rem, 7vw, 2.8rem);
+  line-height: 1.08;
+}
+
+.inactive-card a {
+  color: #0f172a;
+  font-weight: 800;
+  text-underline-offset: 3px;
+}
+
 button,
 input,
 select,
