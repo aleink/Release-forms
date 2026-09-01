@@ -3,37 +3,70 @@ import { readFileSync, writeFileSync } from "node:fs";
 
 const terminalFailures = new Set(["failed", "skipped"]);
 const pendingStatuses = new Set(["pending", "in-progress"]);
+const terminalAliasFailures = new Set(["failed", "skipped"]);
 
-export function classifyPromotion({ request, productionAliases, aliases, inventoryComplete, deploymentId, rollbackAliases }) {
+export function classifyPromotion({ request, productionAliases, aliases, inventoryComplete, deploymentId, rollbackAliases, lastAliasRequestExpired = false }) {
+  if (!Array.isArray(productionAliases) || !Array.isArray(aliases) || !Array.isArray(rollbackAliases)) {
+    return "promotion_uncertain";
+  }
   const exactRequest = request?.type === "promote" && request?.toDeploymentId === deploymentId;
-  const completedAliases = aliases.filter((item) => item.status === "completed");
   const exactProductionAliases = productionAliases.length > 0 && productionAliases.every((item) => item.deploymentId === deploymentId);
   const exactPromotionAliases = aliases.length === productionAliases.length && productionAliases.every((current) =>
     aliases.some((item) => item.alias === current.alias && item.status === "completed"));
-  if (exactRequest && request.jobStatus === "succeeded" && inventoryComplete && exactProductionAliases && exactPromotionAliases) {
+  const completedRequest = exactRequest && request.jobStatus === "succeeded";
+  const completedRequestExpired = lastAliasRequestExpired === true && request === null;
+  if ((completedRequest || completedRequestExpired) && inventoryComplete && exactProductionAliases && exactPromotionAliases) {
     return "promoted";
   }
   if (exactRequest && pendingStatuses.has(request.jobStatus)) return "pending";
   const rollbackMap = new Map(rollbackAliases.map((item) => [item.alias, item.deployment_id]));
   const exactRollbackAliases = productionAliases.length > 0 && productionAliases.length === rollbackMap.size &&
     productionAliases.every((item) => rollbackMap.get(item.alias) === item.deploymentId);
-  if (exactRequest && terminalFailures.has(request.jobStatus) && inventoryComplete && exactRollbackAliases && completedAliases.length === 0) {
+  const aliasesDefinitelyFailed = aliases.length === 0 || aliases.every((item) => terminalAliasFailures.has(item?.status));
+  if (exactRequest && terminalFailures.has(request.jobStatus) && inventoryComplete && exactRollbackAliases && aliasesDefinitelyFailed) {
     return "not_promoted";
   }
   return "promotion_uncertain";
 }
 
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
+const isRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+const hasCompletePagination = (payload) => isRecord(payload) && hasOwn(payload, "pagination") && isRecord(payload.pagination) &&
+  hasOwn(payload.pagination, "next") && payload.pagination.next === null;
 const sanitizeAliases = (payload) => {
-  if (!Array.isArray(payload?.aliases) || !payload?.pagination) return null;
+  if (!isRecord(payload) || !hasOwn(payload, "aliases") || !Array.isArray(payload.aliases) || !hasCompletePagination(payload)) return null;
   const aliases = payload.aliases.map((item) => ({
-    alias: item?.alias || null,
-    id: item?.id || null,
-    status: item?.status || null,
+    alias: isRecord(item) && typeof item.alias === "string" && item.alias.length > 0 ? item.alias : null,
+    id: isRecord(item) && typeof item.id === "string" && item.id.length > 0 ? item.id : null,
+    status: isRecord(item) && typeof item.status === "string" && item.status.length > 0 ? item.status : null,
   }));
   if (aliases.some((item) => !item.alias || !item.id || !item.status) ||
       new Set(aliases.map((item) => item.alias)).size !== aliases.length) return null;
-  return aliases;
+  return aliases.sort((left, right) => left.alias.localeCompare(right.alias));
+};
+const sanitizeDomains = (payload) => {
+  if (!isRecord(payload) || !hasOwn(payload, "domains") || !Array.isArray(payload.domains) || !hasCompletePagination(payload)) return null;
+  const names = payload.domains.map((item) =>
+    isRecord(item) && typeof item.name === "string" && item.name.length > 0 ? item.name : null);
+  if (names.some((name) => name === null) || new Set(names).size !== names.length) return null;
+  return names;
+};
+
+const sanitizeLastAliasRequest = (project) => {
+  if (!isRecord(project) || !hasOwn(project, "lastAliasRequest")) {
+    return { request: undefined, expired: false };
+  }
+  if (project.lastAliasRequest === null) return { request: null, expired: true };
+  if (!isRecord(project.lastAliasRequest)) return { request: undefined, expired: false };
+  const candidate = project.lastAliasRequest;
+  if (!hasOwn(candidate, "type") || !hasOwn(candidate, "toDeploymentId") || !hasOwn(candidate, "jobStatus") ||
+      typeof candidate.type !== "string" || candidate.type.length === 0 ||
+      typeof candidate.toDeploymentId !== "string" || candidate.toDeploymentId.length === 0 ||
+      typeof candidate.jobStatus !== "string" || candidate.jobStatus.length === 0) {
+    return { request: undefined, expired: false };
+  }
+  return { request: candidate, expired: false };
 };
 
 async function fetchJson(path, token, fetchImpl) {
@@ -67,10 +100,12 @@ export async function readPromotionSnapshot({ intent, token, teamId, fetchImpl =
     throw new Error("Vercel project identity changed during reconciliation");
   }
   const domainsPayload = await fetchJson(`/v9/projects/${encodedProjectId}/domains?limit=100&${query}`, token, fetchImpl);
-  const domainNames = (Array.isArray(domainsPayload?.domains) ? domainsPayload.domains : []).map((domain) => domain?.name).filter(Boolean);
-  const productionAliasNames = [...new Set([intent.expected_production_alias, ...domainNames])].sort();
+  const domainNames = sanitizeDomains(domainsPayload);
+  const promoteAliasesPayload = await fetchJson(`/v1/projects/${encodedProjectId}/promote/aliases?limit=100&${query}`, token, fetchImpl);
+  const aliases = sanitizeAliases(promoteAliasesPayload);
+  const productionAliasNames = [...new Set([intent.expected_production_alias, ...(domainNames || [])])].sort();
   const rollbackAliasNames = rollbackAliases.map((item) => item.alias).sort();
-  const exactAliasInventory = productionAliasNames.length === rollbackAliasNames.length &&
+  const exactAliasInventory = Boolean(domainNames) && productionAliasNames.length === rollbackAliasNames.length &&
     productionAliasNames.every((alias, index) => alias === rollbackAliasNames[index]);
   const productionAliases = await Promise.all(productionAliasNames.map(async (alias) => {
     const deployment = await fetchJson(`/v13/deployments/${encodeURIComponent(alias)}?${query}`, token, fetchImpl);
@@ -82,11 +117,8 @@ export async function readPromotionSnapshot({ intent, token, teamId, fetchImpl =
       readyState: deployment.readyState || null,
     };
   }));
-  const promoteAliasesPayload = await fetchJson(`/v1/projects/${encodedProjectId}/promote/aliases?limit=100&${query}`, token, fetchImpl);
-  const aliases = sanitizeAliases(promoteAliasesPayload);
-  const request = project.lastAliasRequest || null;
-  const inventoryComplete = Boolean(domainsPayload?.pagination && !domainsPayload.pagination.next &&
-    promoteAliasesPayload?.pagination && !promoteAliasesPayload.pagination.next && aliases && exactAliasInventory &&
+  const { request, expired: lastAliasRequestExpired } = sanitizeLastAliasRequest(project);
+  const inventoryComplete = Boolean(domainNames && aliases && exactAliasInventory &&
     productionAliases.every((item) => item.projectName === intent.project_name && item.target === "production" && item.readyState === "READY"));
   const promotionState = classifyPromotion({
     request,
@@ -95,6 +127,7 @@ export async function readPromotionSnapshot({ intent, token, teamId, fetchImpl =
     inventoryComplete,
     deploymentId: intent.deployment_id,
     rollbackAliases,
+    lastAliasRequestExpired,
   });
   return {
     promotionState,
@@ -110,6 +143,7 @@ export async function readPromotionSnapshot({ intent, token, teamId, fetchImpl =
       to_deployment_id: request?.toDeploymentId || null,
       type: request?.type || null,
       aliases: aliases || [],
+      last_alias_request_expired: lastAliasRequestExpired,
     },
   };
 }
@@ -128,20 +162,43 @@ export async function reconcilePromotion({
   let promotionState = "promotion_uncertain";
   let lastEvidence = null;
   let providerError = null;
+  let promotedFingerprint = null;
+  let promotionConfirmed = false;
   do {
     try {
       const snapshot = await readPromotionSnapshot({ intent, token, teamId, fetchImpl });
       promotionState = snapshot.promotionState;
       lastEvidence = snapshot.provider;
       providerError = null;
-      if (promotionState === "promoted" || promotionState === "not_promoted") break;
+      if (promotionState === "promoted") {
+        const fingerprint = JSON.stringify({
+          production_aliases: snapshot.provider.production_aliases,
+          aliases: snapshot.provider.aliases,
+          job_status: snapshot.provider.job_status,
+          to_deployment_id: snapshot.provider.to_deployment_id,
+          type: snapshot.provider.type,
+          last_alias_request_expired: snapshot.provider.last_alias_request_expired,
+        });
+        if (promotedFingerprint === fingerprint) {
+          promotionConfirmed = true;
+          break;
+        }
+        promotedFingerprint = fingerprint;
+      } else {
+        promotedFingerprint = null;
+      }
+      if (promotionState === "not_promoted") break;
     } catch (error) {
       providerError = error instanceof Error ? error.message.slice(0, 200) : "unknown reconciliation error";
+      promotionState = "promotion_uncertain";
+      promotedFingerprint = null;
     }
     if (now() >= deadline) break;
     await sleepImpl(pollMs);
   } while (now() <= deadline);
-  if (promotionState === "pending") promotionState = "promotion_uncertain";
+  if (promotionState === "pending" || (promotionState === "promoted" && !promotionConfirmed)) {
+    promotionState = "promotion_uncertain";
+  }
   return { promotionState, lastEvidence, providerError };
 }
 
