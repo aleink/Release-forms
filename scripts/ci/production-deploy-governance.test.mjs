@@ -5,6 +5,8 @@ import test from "node:test";
 
 const workflow = readFileSync(resolve(".github/workflows/deploy-vercel-production.yml"), "utf8");
 const liveVerifier = readFileSync(resolve("scripts/ci/verify-live-vercel-canary.mjs"), "utf8");
+const deploymentInventory = readFileSync(resolve("scripts/ci/capture-vercel-deployment-files.mjs"), "utf8");
+const packageJson = JSON.parse(readFileSync(resolve("package.json"), "utf8"));
 
 test("retired release publisher remains manual, default-off, and exact-project bound", () => {
   assert.match(workflow, /workflow_dispatch:/);
@@ -40,13 +42,19 @@ test("one exact static artifact is canaried and bound before any promotion", () 
   const verify = workflow.indexOf('verify-vercel-output.mjs .vercel/output "$RUNNER_TEMP/reviewed-dist"');
   const deploy = workflow.indexOf("deploy --prebuilt --prod --skip-domain");
   const inspect = workflow.indexOf("vercel@59.10.0 inspect");
+  const inventory = workflow.indexOf("capture-vercel-deployment-files.mjs");
   const exactBytes = workflow.indexOf("verify-live-vercel-canary.mjs");
   const intent = workflow.indexOf("Persist full promotion intent");
   const promote = workflow.indexOf("vercel@59.10.0 promote");
-  assert.ok(seal >= 0 && build > seal && verify > build && deploy > verify && inspect > deploy && exactBytes > inspect && intent > exactBytes && promote > intent);
+  assert.ok(seal >= 0 && build > seal && verify > build && deploy > verify && inspect > deploy && inventory > inspect && exactBytes > inventory && intent > exactBytes && promote > intent);
   assert.match(liveVerifier, /headers[.]length !== 10/);
   assert.match(liveVerifier, /missing or weakened/);
-  assert.match(workflow, /find [.]+ -type f/);
+  assert.match(deploymentInventory, /\/v6\/deployments\/\$\{encodeURIComponent\(deploymentId\)\}\/files/);
+  assert.match(deploymentInventory, /Vercel complete deployment file tree differs/);
+  assert.match(workflow, /deployment-file-inventory[.]json/);
+  assert.match(workflow, /done < "\$RUNNER_TEMP\/provider-static-files"/);
+  assert.doesNotMatch(workflow.slice(inventory, exactBytes), /reviewed-dist" && find|find [.]+ -type f/);
+  assert.match(packageJson.scripts["test:security"], /capture-vercel-deployment-files[.]test[.]mjs/);
   assert.match(workflow, /live-static/);
 });
 

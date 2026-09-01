@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -39,8 +40,55 @@ const parseHeaders = (path, governedNames) => {
   return values;
 };
 
-export function verifyLiveCanary({ reviewedRoot, liveStaticRoot, artifactHeadersRoot, routeRoot }) {
+const exactInventoryKeys = [
+  "complete", "deployment_id", "deployment_url", "directories", "files", "org_id", "pagination",
+  "project_id", "project_name", "provider_directories", "provider_files", "schema", "source",
+].sort();
+
+const validateInventory = (inventory, reviewedFiles, reviewedDirectories, expectedIdentity) => {
+  const expectedProviderFiles = [
+    ".vercel/output/builds.json",
+    ".vercel/output/config.json",
+    ".vercel/output/diagnostics/cli_traces.json",
+    ...reviewedFiles.map((path) => `.vercel/output/static/${path}`),
+  ].sort();
+  const expectedProviderDirectories = [
+    ".vercel",
+    ".vercel/output",
+    ".vercel/output/diagnostics",
+    ".vercel/output/static",
+    ...reviewedDirectories.map((path) => `.vercel/output/static/${path}`),
+  ].sort();
+  if (!inventory || typeof inventory !== "object" || Array.isArray(inventory) ||
+      JSON.stringify(Object.keys(inventory).sort()) !== JSON.stringify(exactInventoryKeys) ||
+      inventory.schema !== 1 || inventory.source !== "vercel-v6-deployment-files" || inventory.complete !== true ||
+      JSON.stringify(inventory.pagination) !== JSON.stringify({ kind: "single_recursive_tree", pages: 1, continuation: null }) ||
+      inventory.org_id !== expectedIdentity.orgId || inventory.project_id !== expectedIdentity.projectId ||
+      inventory.project_name !== expectedIdentity.projectName || inventory.deployment_id !== expectedIdentity.deploymentId ||
+      inventory.deployment_url !== expectedIdentity.deploymentUrl || !Array.isArray(inventory.provider_files) ||
+      !Array.isArray(inventory.provider_directories) || JSON.stringify(inventory.provider_files) !== JSON.stringify(expectedProviderFiles) ||
+      JSON.stringify(inventory.provider_directories) !== JSON.stringify(expectedProviderDirectories) ||
+      JSON.stringify(inventory.files) !== JSON.stringify(reviewedFiles) ||
+      JSON.stringify(inventory.directories) !== JSON.stringify(reviewedDirectories)) {
+    throw new Error("provider deployment file inventory is incomplete, unbound, or differs from the reviewed artifact");
+  }
+};
+
+export function verifyLiveCanary({ reviewedRoot, liveStaticRoot, artifactHeadersRoot, routeRoot, deploymentInventory, expectedIdentity }) {
   const reviewedFiles = realFiles(reviewedRoot, "reviewed artifact");
+  const reviewedDirectories = [];
+  const collectDirectories = (directory) => {
+    for (const name of readdirSync(directory).sort()) {
+      const path = resolve(directory, name);
+      const entry = lstatSync(path);
+      if (entry.isDirectory()) {
+        reviewedDirectories.push(relative(reviewedRoot, path));
+        collectDirectories(path);
+      }
+    }
+  };
+  collectDirectories(reviewedRoot);
+  validateInventory(deploymentInventory, reviewedFiles, reviewedDirectories, expectedIdentity);
   const liveFiles = realFiles(liveStaticRoot, "live artifact");
   if (JSON.stringify(liveFiles) !== JSON.stringify(reviewedFiles)) {
     throw new Error("live artifact file manifest differs from the exact reviewed artifact");
@@ -95,17 +143,41 @@ export function verifyLiveCanary({ reviewedRoot, liveStaticRoot, artifactHeaders
     }
     verifyHeaders(resolve(routeRoot, `${label}.headers`), `live ${label} route`);
   }
-  return { files: reviewedFiles, routes: ["/", "/client", "/staff"], headerCount: expectedHeaders.size };
+  return {
+    files: reviewedFiles,
+    routes: ["/", "/client", "/staff"],
+    headerCount: expectedHeaders.size,
+    provider_inventory_complete: true,
+    org_id: expectedIdentity.orgId,
+    project_id: expectedIdentity.projectId,
+    deployment_id: expectedIdentity.deploymentId,
+    deployment_url: expectedIdentity.deploymentUrl,
+  };
 }
 
 async function main() {
-  const [reviewedRoot, liveStaticRoot, artifactHeadersRoot, routeRoot, evidencePath] = process.argv.slice(2).map((path) => path && resolve(path));
-  if (!reviewedRoot || !liveStaticRoot || !artifactHeadersRoot || !routeRoot || !evidencePath) {
-    throw new Error("reviewed, live-static, artifact-headers, live-routes, and evidence paths are required");
+  const [reviewedRoot, liveStaticRoot, artifactHeadersRoot, routeRoot, inventoryPath, evidencePath] = process.argv.slice(2).map((path) => path && resolve(path));
+  if (!reviewedRoot || !liveStaticRoot || !artifactHeadersRoot || !routeRoot || !inventoryPath || !evidencePath) {
+    throw new Error("reviewed, live-static, artifact-headers, live-routes, provider inventory, and evidence paths are required");
   }
-  const result = verifyLiveCanary({ reviewedRoot, liveStaticRoot, artifactHeadersRoot, routeRoot });
+  const inventoryBytes = readFileSync(inventoryPath);
+  const deploymentInventory = JSON.parse(inventoryBytes.toString("utf8"));
+  const result = verifyLiveCanary({
+    reviewedRoot,
+    liveStaticRoot,
+    artifactHeadersRoot,
+    routeRoot,
+    deploymentInventory,
+    expectedIdentity: {
+      orgId: process.env.EXPECTED_VERCEL_ORG_ID,
+      projectId: process.env.EXPECTED_VERCEL_PROJECT_ID,
+      projectName: process.env.EXPECTED_VERCEL_PROJECT_NAME,
+      deploymentId: process.env.DEPLOYMENT_ID,
+      deploymentUrl: process.env.DEPLOYMENT_URL?.replace(/\/$/, ""),
+    },
+  });
   const { writeFileSync } = await import("node:fs");
-  writeFileSync(evidencePath, `${JSON.stringify({ schema: 1, ...result, exact_bytes: true, exact_headers: true, runtime: "inactive" })}\n`, { flag: "wx" });
+  writeFileSync(evidencePath, `${JSON.stringify({ schema: 2, ...result, provider_inventory_sha256: createHash("sha256").update(inventoryBytes).digest("hex"), exact_bytes: true, exact_headers: true, runtime: "inactive" })}\n`, { flag: "wx" });
   console.log("Verified every live inactive artifact byte and every governed header.");
 }
 

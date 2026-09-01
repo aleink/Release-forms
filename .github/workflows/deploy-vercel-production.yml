@@ -166,22 +166,42 @@ jobs:
           node -e 'const fs=require("fs");const d=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));const host=process.env.DEPLOYMENT_URL.replace(/^https:\/\//,"").replace(/\/$/,"");if(!/^dpl_[A-Za-z0-9]+$/.test(d.id||"")||d.name!==process.env.EXPECTED_VERCEL_PROJECT_NAME||d.target!=="production"||d.readyState!=="READY"||d.url!==host)throw new Error("The canary identity does not match the exact dedicated production deployment.");' "$RUNNER_TEMP/canary-deployment.json"
           echo "deployment_id=$(jq -r .id "$RUNNER_TEMP/canary-deployment.json")" >> "$GITHUB_OUTPUT"
 
+      - name: Enumerate and bind the complete provider deployment file tree
+        env:
+          DEPLOYMENT_ID: ${{ steps.identity.outputs.deployment_id }}
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.url }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/ci/capture-vercel-deployment-files.mjs \
+            "$RUNNER_TEMP/reviewed-dist" .vercel/output \
+            release-evidence/deployment-file-inventory.json
+
       - name: Canary exact inactive bytes, headers, and paths
         env:
+          DEPLOYMENT_ID: ${{ steps.identity.outputs.deployment_id }}
           DEPLOYMENT_URL: ${{ steps.deploy.outputs.url }}
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/live-static" "$RUNNER_TEMP/live-artifact-headers" "$RUNNER_TEMP/live-routes"
+          jq -er \
+            'if .schema == 1 and .complete == true and (.files | type == "array") and (.files | length > 0) then .files[] else error("invalid provider deployment file inventory") end' \
+            release-evidence/deployment-file-inventory.json > "$RUNNER_TEMP/provider-static-files"
           while IFS= read -r artifact; do
+            [[ "$artifact" =~ ^[A-Za-z0-9._/-]+$ ]] && [[ "/$artifact/" != *"/../"* ]] && [[ "$artifact" != /* ]] || {
+              echo "::error::Provider inventory contained an unsafe static path."
+              exit 1
+            }
             mkdir -p "$RUNNER_TEMP/live-static/$(dirname "$artifact")"
             mkdir -p "$RUNNER_TEMP/live-artifact-headers/$(dirname "$artifact")"
             status="$(npx --yes vercel@59.10.0 curl "/$artifact" --deployment "$DEPLOYMENT_URL" --token="$VERCEL_TOKEN" -- \
               --silent --show-error --output "$RUNNER_TEMP/live-static/$artifact" \
               --dump-header "$RUNNER_TEMP/live-artifact-headers/$artifact" --write-out '%{http_code}')"
             test "$status" = "200" || { echo "::error::/$artifact returned HTTP $status."; exit 1; }
-          done < <(cd "$RUNNER_TEMP/reviewed-dist" && find . -type f -print | sed 's#^./##' | LC_ALL=C sort)
+          done < "$RUNNER_TEMP/provider-static-files"
           capture_route() {
             local path="$1" label="$2"
             local status
@@ -197,6 +217,7 @@ jobs:
           node scripts/ci/verify-live-vercel-canary.mjs \
             "$RUNNER_TEMP/reviewed-dist" "$RUNNER_TEMP/live-static" "$RUNNER_TEMP/live-artifact-headers" \
             "$RUNNER_TEMP/live-routes" \
+            release-evidence/deployment-file-inventory.json \
             release-evidence/canary-evidence.json
 
       - name: Persist full promotion intent before provider mutation
@@ -205,7 +226,7 @@ jobs:
           DEPLOYMENT_ID: ${{ steps.identity.outputs.deployment_id }}
           DEPLOYMENT_URL: ${{ steps.deploy.outputs.url }}
         run: >-
-          node -e 'const fs=require("fs");const e=process.env;const rollback=JSON.parse(fs.readFileSync("release-evidence/rollback-inventory.json","utf8"));const intent={schema:1,repository:e.GITHUB_REPOSITORY,sha:e.RELEASE_SHA.toLowerCase(),run_id:e.GITHUB_RUN_ID,org_id:e.EXPECTED_VERCEL_ORG_ID,project_id:e.EXPECTED_VERCEL_PROJECT_ID,project_name:e.EXPECTED_VERCEL_PROJECT_NAME,expected_production_alias:e.EXPECTED_PRODUCTION_ALIAS,deployment_id:e.DEPLOYMENT_ID,deployment_url:e.DEPLOYMENT_URL,artifact_sha256:e.ARTIFACT_DIGEST,rollback_deployment_id:rollback.deployment_id,rollback_inventory:rollback,canary_verified:true,runtime:"inactive",status:"promotion_intent",operator_action:"If final evidence is absent or uncertain: Do not retry promotion blindly. Reconcile every alias in rollback_inventory, then roll back only to rollback_deployment_id if needed."};fs.writeFileSync("release-evidence/promotion-intent.json",JSON.stringify(intent)+"\n");fs.writeFileSync("release-evidence/deployment-evidence.json",JSON.stringify(intent)+"\n");'
+          node -e 'const fs=require("fs");const e=process.env;const rollback=JSON.parse(fs.readFileSync("release-evidence/rollback-inventory.json","utf8"));const canary=JSON.parse(fs.readFileSync("release-evidence/canary-evidence.json","utf8"));const intent={schema:1,repository:e.GITHUB_REPOSITORY,sha:e.RELEASE_SHA.toLowerCase(),run_id:e.GITHUB_RUN_ID,org_id:e.EXPECTED_VERCEL_ORG_ID,project_id:e.EXPECTED_VERCEL_PROJECT_ID,project_name:e.EXPECTED_VERCEL_PROJECT_NAME,expected_production_alias:e.EXPECTED_PRODUCTION_ALIAS,deployment_id:e.DEPLOYMENT_ID,deployment_url:e.DEPLOYMENT_URL,artifact_sha256:e.ARTIFACT_DIGEST,provider_file_inventory_sha256:canary.provider_inventory_sha256,rollback_deployment_id:rollback.deployment_id,rollback_inventory:rollback,canary_verified:true,runtime:"inactive",status:"promotion_intent",operator_action:"If final evidence is absent or uncertain: Do not retry promotion blindly. Reconcile every alias in rollback_inventory, then roll back only to rollback_deployment_id if needed."};fs.writeFileSync("release-evidence/promotion-intent.json",JSON.stringify(intent)+"\n");fs.writeFileSync("release-evidence/deployment-evidence.json",JSON.stringify(intent)+"\n");'
 
       - name: Retain immutable pre-promotion intent
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

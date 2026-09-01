@@ -7,6 +7,13 @@ import { verifyLiveCanary } from "./verify-live-vercel-canary.mjs";
 
 const config = JSON.parse(readFileSync(resolve("vercel.json"), "utf8"));
 const headers = config.headers[0].headers.map(({ key, value }) => `${key}: ${value}\r\n`).join("");
+const expectedIdentity = {
+  orgId: "team_dYh8hnyuxB6dbWOjq34jIHNg",
+  projectId: "prj_AgFYzaxmaGGuLPQnxkeSfzLawwMX",
+  projectName: "release-forms",
+  deploymentId: "dpl_ExactCanary123",
+  deploymentUrl: "https://release-forms-exact.vercel.app",
+};
 
 test("source pins the exact ten-header inactive response policy", () => {
   assert.deepEqual(Object.fromEntries(config.headers[0].headers.map(({ key, value }) => [key, value])), {
@@ -44,7 +51,28 @@ const fixture = () => {
     writeFileSync(resolve(routeRoot, `${label}.headers`), `HTTP/2 200\r\n${headers}\r\n`);
     writeFileSync(resolve(routeRoot, `${label}.status`), "200\n");
   }
-  return { parent, reviewedRoot, liveStaticRoot, artifactHeadersRoot, routeRoot };
+  const deploymentInventory = {
+    schema: 1,
+    source: "vercel-v6-deployment-files",
+    complete: true,
+    pagination: { kind: "single_recursive_tree", pages: 1, continuation: null },
+    org_id: expectedIdentity.orgId,
+    project_id: expectedIdentity.projectId,
+    project_name: expectedIdentity.projectName,
+    deployment_id: expectedIdentity.deploymentId,
+    deployment_url: expectedIdentity.deploymentUrl,
+    provider_files: [
+      ".vercel/output/builds.json", ".vercel/output/config.json", ".vercel/output/diagnostics/cli_traces.json",
+      ".vercel/output/static/assets/index-AbCdEf12.css", ".vercel/output/static/assets/index-ZyXwVu98.js",
+      ".vercel/output/static/index.html",
+    ],
+    provider_directories: [
+      ".vercel", ".vercel/output", ".vercel/output/diagnostics", ".vercel/output/static", ".vercel/output/static/assets",
+    ],
+    files: ["assets/index-AbCdEf12.css", "assets/index-ZyXwVu98.js", "index.html"],
+    directories: ["assets"],
+  };
+  return { parent, reviewedRoot, liveStaticRoot, artifactHeadersRoot, routeRoot, deploymentInventory, expectedIdentity };
 };
 
 test("live canary accepts the exact complete artifact and ten-header matrix", () => {
@@ -54,9 +82,32 @@ test("live canary accepts the exact complete artifact and ten-header matrix", ()
       files: ["assets/index-AbCdEf12.css", "assets/index-ZyXwVu98.js", "index.html"],
       routes: ["/", "/client", "/staff"],
       headerCount: 10,
+      provider_inventory_complete: true,
+      org_id: expectedIdentity.orgId,
+      project_id: expectedIdentity.projectId,
+      deployment_id: expectedIdentity.deploymentId,
+      deployment_url: expectedIdentity.deploymentUrl,
     });
   } finally {
     rmSync(data.parent, { recursive: true, force: true });
+  }
+});
+
+test("live canary rejects incomplete, extra-path, or wrong-deployment provider inventory", () => {
+  for (const mutate of [
+    (inventory) => { inventory.complete = false; },
+    (inventory) => { inventory.files.push("unexpected.html"); },
+    (inventory) => { inventory.provider_files.push(".vercel/output/static/unexpected.html"); },
+    (inventory) => { inventory.deployment_id = "dpl_OtherCanary123"; },
+    (inventory) => { inventory.pagination = { kind: "cursor", pages: 1, continuation: "more" }; },
+  ]) {
+    const data = fixture();
+    try {
+      mutate(data.deploymentInventory);
+      assert.throws(() => verifyLiveCanary(data), /provider deployment file inventory is incomplete/);
+    } finally {
+      rmSync(data.parent, { recursive: true, force: true });
+    }
   }
 });
 
