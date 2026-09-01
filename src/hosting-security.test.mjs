@@ -64,7 +64,18 @@ test("production provider credentials are fail-closed and excluded from install,
   assert.match(providerBuild, /vercel@59\.10\.0 build --prod/);
   assert.doesNotMatch(providerBuild, /secrets\.VERCEL_(?:TOKEN|ORG_ID|PROJECT_ID)|--token/);
   assert.match(deployWorkflow, /deploy --prebuilt --prod --skip-domain/);
-  assert.match(deployWorkflow, /vercel@59\.10\.0 curl "\$path" --deployment "\$DEPLOYMENT_URL"/);
+  const canaryInvocations = [...deployWorkflow.matchAll(/status="\$\((npx --yes vercel@59\.10\.0[\s\S]*?)\)"/g)]
+    .map((match) => match[1]);
+  assert.equal(canaryInvocations.length, 2);
+  for (const invocation of canaryInvocations) {
+    const tokenIndex = invocation.indexOf('--token="$VERCEL_TOKEN"');
+    const commandIndex = invocation.indexOf(" curl ");
+    const separatorIndex = invocation.indexOf(" -- \\");
+    assert.ok(tokenIndex >= 0 && tokenIndex < commandIndex, "Vercel token must be a global option before curl");
+    assert.ok(commandIndex >= 0 && commandIndex < separatorIndex, "curl transport flags must follow the separator");
+    assert.doesNotMatch(invocation.slice(separatorIndex), /(?:--token|VERCEL_TOKEN)/);
+    assert.doesNotMatch(invocation, /vercel@59\.10\.0\s+curl[\s\S]*?--token/);
+  }
   assert.match(deployWorkflow, /verify-live-vercel-canary[.]mjs/);
   assert.match(liveCanaryVerifier, /live artifact bytes differ/);
   assert.match(liveCanaryVerifier, /headers[.]length !== 10/);

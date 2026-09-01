@@ -197,7 +197,7 @@ jobs:
             }
             mkdir -p "$RUNNER_TEMP/live-static/$(dirname "$artifact")"
             mkdir -p "$RUNNER_TEMP/live-artifact-headers/$(dirname "$artifact")"
-            status="$(npx --yes vercel@59.10.0 curl "/$artifact" --deployment "$DEPLOYMENT_URL" --token="$VERCEL_TOKEN" -- \
+            status="$(npx --yes vercel@59.10.0 --token="$VERCEL_TOKEN" curl "/$artifact" --deployment "$DEPLOYMENT_URL" -- \
               --silent --show-error --output "$RUNNER_TEMP/live-static/$artifact" \
               --dump-header "$RUNNER_TEMP/live-artifact-headers/$artifact" --write-out '%{http_code}')"
             test "$status" = "200" || { echo "::error::/$artifact returned HTTP $status."; exit 1; }
@@ -205,7 +205,7 @@ jobs:
           capture_route() {
             local path="$1" label="$2"
             local status
-            status="$(npx --yes vercel@59.10.0 curl "$path" --deployment "$DEPLOYMENT_URL" --token="$VERCEL_TOKEN" -- \
+            status="$(npx --yes vercel@59.10.0 --token="$VERCEL_TOKEN" curl "$path" --deployment "$DEPLOYMENT_URL" -- \
               --silent --show-error --user-agent 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) Mobile/15E148 Safari/604.1' \
               --output "$RUNNER_TEMP/live-routes/$label.body" \
               --dump-header "$RUNNER_TEMP/live-routes/$label.headers" --write-out '%{http_code}')"
