@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const dist = process.argv[2] || fileURLToPath(new URL("../dist/", import.meta.url));
+const distStats = lstatSync(dist);
+assert.ok(distStats.isDirectory() && !distStats.isSymbolicLink(), "production artifact root must be a regular non-symlink directory");
 const topLevel = readdirSync(dist).sort();
 assert.deepEqual(topLevel, ["assets", "index.html"], "production artifact top-level tree drifted");
 

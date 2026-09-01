@@ -118,6 +118,7 @@ jobs:
           grep -Eiq "^content-security-policy:.*frame-ancestors[[:space:]]+'none'" canary-headers.normalized.txt
           grep -Eiq '^x-frame-options:[[:space:]]*DENY' canary-headers.normalized.txt
           grep -Eiq '^cache-control:.*no-store' canary-headers.normalized.txt
+          node scripts/ci/assert-deploy-sha.mjs "$RELEASE_SHA"
           npx --yes vercel@59.10.0 promote "$deployment_url" --yes --token="$VERCEL_TOKEN"
           artifact_digest="$(find .vercel/output -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
           printf '{"schema":1,"repository":"%s","sha":"%s","run_id":"%s","deployment_url":"%s","artifact_sha256":"%s","canary_verified":true,"promoted":true}\n' \

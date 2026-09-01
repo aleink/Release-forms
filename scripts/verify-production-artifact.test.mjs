@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -16,6 +16,16 @@ const fixture = () => {
 };
 const verify = (directory) => spawnSync(process.execPath, [verifier, directory], { encoding: "utf8" });
 
+test("production promotion rechecks main after the exact canary", () => {
+  const workflow = readFileSync(resolve(".github/workflows/deploy-vercel-production.yml"), "utf8");
+  const assertions = [...workflow.matchAll(/assert-deploy-sha[.]mjs \"\$RELEASE_SHA\"/g)];
+  assert.equal(assertions.length, 2);
+  const canaryIndex = workflow.indexOf("Exact canary returned HTTP");
+  const finalAssertionIndex = assertions[1]?.index ?? -1;
+  const promoteIndex = workflow.indexOf('vercel@59.10.0 promote');
+  assert.ok(canaryIndex >= 0 && finalAssertionIndex > canaryIndex && promoteIndex > finalAssertionIndex);
+});
+
 test("inactive production verifier accepts only the exact Vite artifact shape", () => {
   const directory = fixture();
   try {
@@ -31,6 +41,9 @@ test("inactive production verifier rejects extra paths, nested directories, and 
   const extra = fixture();
   const nested = fixture();
   const linked = fixture();
+  const rootTarget = fixture();
+  const rootParent = mkdtempSync(resolve(tmpdir(), "release-production-root-link-"));
+  const rootLink = resolve(rootParent, "dist");
   try {
     writeFileSync(resolve(extra, "robots.txt"), "unexpected");
     assert.equal(verify(extra).status, 1);
@@ -44,9 +57,16 @@ test("inactive production verifier rejects extra paths, nested directories, and 
     const result = verify(linked);
     assert.equal(result.status, 1);
     assert.match(result.stderr, /regular non-symlink file/);
+
+    symlinkSync(rootTarget, rootLink, "dir");
+    const rootResult = verify(rootLink);
+    assert.equal(rootResult.status, 1);
+    assert.match(rootResult.stderr, /root must be a regular non-symlink directory/);
   } finally {
     rmSync(extra, { recursive: true, force: true });
     rmSync(nested, { recursive: true, force: true });
     rmSync(linked, { recursive: true, force: true });
+    rmSync(rootParent, { recursive: true, force: true });
+    rmSync(rootTarget, { recursive: true, force: true });
   }
 });
