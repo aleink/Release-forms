@@ -8,12 +8,33 @@ const client = readFileSync(new URL("lib/supabase.ts", import.meta.url), "utf8")
 const vercel = JSON.parse(readFileSync(new URL("vercel.json", projectRoot), "utf8"));
 const hostingStatus = readFileSync(new URL("docs/HOSTING_STATUS.md", projectRoot), "utf8");
 const deployWorkflow = readFileSync(new URL(".github/workflows/deploy-vercel-production.yml", projectRoot), "utf8");
+const codeqlWorkflows = ["code-scanning.yml", "security-monitoring.yml"].map((name) => (
+  readFileSync(new URL(`.github/workflows/${name}`, projectRoot), "utf8")
+));
 const liveCanaryVerifier = readFileSync(new URL("scripts/ci/verify-live-vercel-canary.mjs", projectRoot), "utf8");
 
 function responseHeaders() {
   const rule = vercel.headers.find((candidate) => candidate.source === "/(.*)");
   return new Map(rule.headers.map(({ key, value }) => [key.toLowerCase(), value]));
 }
+
+test("local CodeQL evidence is fail-closed and uses read-only configured API access", () => {
+  for (const workflow of codeqlWorkflows) {
+    assert.match(
+      workflow,
+      /permissions:\s*\n\s+actions:\s*read\s*\n\s+contents:\s*read\s*\n\s+security-events:\s*read/,
+    );
+    assert.doesNotMatch(workflow, /security-events:\s*write/);
+    assert.match(workflow, /upload:\s*never\s*\n\s+upload-database:\s*false\s*\n\s+output:\s*codeql-results/);
+    assert.match(workflow, /name: Verify CodeQL SARIF evidence[\s\S]*?CodeQL produced no SARIF files/);
+    assert.match(workflow, /\.version == "2\.1\.0"[\s\S]*?\.tool\.driver\.name[\s\S]*?\.results/);
+    assert.match(workflow, /SHA256SUMS[\s\S]*?evidence\.json/);
+    assert.match(workflow, /jq -n \\\n\s+--arg repository[\s\S]*?resultCount/);
+    assert.doesNotMatch(workflow, /jq -n \+/);
+    assert.match(workflow, /Validated CodeQL SARIF contains \$result_count result/);
+    assert.match(workflow, /path:\s*codeql-results\s*\n\s+if-no-files-found:\s*error/);
+  }
+});
 
 test("production builds are deliberately inactive and cannot initialize Supabase", () => {
   assert.match(client, /isReleaseFormRuntimeActive = import\.meta\.env\.MODE !== "production"/);
