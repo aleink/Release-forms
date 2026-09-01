@@ -27,6 +27,7 @@ jobs:
     timeout-minutes: 30
     environment: Production
     env:
+      EXPECTED_VERCEL_ORG_ID: team_dYh8hnyuxB6dbWOjq34jIHNg
       EXPECTED_VERCEL_PROJECT_ID: prj_AgFYzaxmaGGuLPQnxkeSfzLawwMX
       EXPECTED_VERCEL_PROJECT_NAME: release-forms
       EXPECTED_PRODUCTION_ALIAS: release-forms.vercel.app
@@ -96,11 +97,15 @@ jobs:
             echo "::error::VERCEL_PROJECT_ID does not identify the source-pinned release-forms project."
             exit 1
           }
+          test "$VERCEL_ORG_ID" = "$EXPECTED_VERCEL_ORG_ID" || {
+            echo "::error::VERCEL_ORG_ID does not identify the source-pinned release-forms account."
+            exit 1
+          }
           curl --fail --silent --show-error \
             -H "Authorization: Bearer $VERCEL_TOKEN" \
             "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID?teamId=$VERCEL_ORG_ID" \
             > "$RUNNER_TEMP/vercel-project.json"
-          node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));if(p.id!==process.env.EXPECTED_VERCEL_PROJECT_ID||p.name!==process.env.EXPECTED_VERCEL_PROJECT_NAME)throw new Error("Unexpected Vercel project response.");if(p.link!=null)throw new Error("Git integration must be disconnected before this dormant publisher can be enabled.");' "$RUNNER_TEMP/vercel-project.json"
+          node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));if(p.id!==process.env.EXPECTED_VERCEL_PROJECT_ID||p.name!==process.env.EXPECTED_VERCEL_PROJECT_NAME||p.accountId!==process.env.EXPECTED_VERCEL_ORG_ID)throw new Error("Unexpected Vercel project or account response.");if(p.link!=null)throw new Error("Git integration must be disconnected before this dormant publisher can be enabled.");' "$RUNNER_TEMP/vercel-project.json"
 
       - name: Pull production configuration
         env:
@@ -110,9 +115,7 @@ jobs:
         run: npx --yes vercel@59.10.0 pull --yes --environment=production --token="$VERCEL_TOKEN"
 
       - name: Verify linked Vercel project
-        env:
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-        run: node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync(".vercel/project.json","utf8"));if(p.orgId!==process.env.VERCEL_ORG_ID||p.projectId!==process.env.EXPECTED_VERCEL_PROJECT_ID)throw new Error("Vercel link does not match the exact dedicated production project.")'
+        run: node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync(".vercel/project.json","utf8"));if(p.orgId!==process.env.EXPECTED_VERCEL_ORG_ID||p.projectId!==process.env.EXPECTED_VERCEL_PROJECT_ID)throw new Error("Vercel link does not match the exact source-pinned account and dedicated production project.")'
 
       - name: Build and verify the immutable inactive artifact once
         shell: bash
@@ -170,27 +173,31 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          run_canary() {
+          mkdir -p "$RUNNER_TEMP/live-static" "$RUNNER_TEMP/live-artifact-headers" "$RUNNER_TEMP/live-routes"
+          while IFS= read -r artifact; do
+            mkdir -p "$RUNNER_TEMP/live-static/$(dirname "$artifact")"
+            mkdir -p "$RUNNER_TEMP/live-artifact-headers/$(dirname "$artifact")"
+            status="$(npx --yes vercel@59.10.0 curl "/$artifact" --deployment "$DEPLOYMENT_URL" --token="$VERCEL_TOKEN" -- \
+              --silent --show-error --output "$RUNNER_TEMP/live-static/$artifact" \
+              --dump-header "$RUNNER_TEMP/live-artifact-headers/$artifact" --write-out '%{http_code}')"
+            test "$status" = "200" || { echo "::error::/$artifact returned HTTP $status."; exit 1; }
+          done < <(cd "$RUNNER_TEMP/reviewed-dist" && find . -type f -print | sed 's#^./##' | LC_ALL=C sort)
+          capture_route() {
             local path="$1" label="$2"
             local status
             status="$(npx --yes vercel@59.10.0 curl "$path" --deployment "$DEPLOYMENT_URL" --token="$VERCEL_TOKEN" -- \
               --silent --show-error --user-agent 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) Mobile/15E148 Safari/604.1' \
-              --output "$RUNNER_TEMP/$label.body" --dump-header "$RUNNER_TEMP/$label.headers" --write-out '%{http_code}')"
-            test "$status" = "200" || { echo "::error::$path returned HTTP $status."; exit 1; }
-            cmp --silent "$RUNNER_TEMP/reviewed-dist/index.html" "$RUNNER_TEMP/$label.body"
-            grep -Fq "This standalone form is not active." "$RUNNER_TEMP/$label.body"
-            tr -d '\r' < "$RUNNER_TEMP/$label.headers" > "$RUNNER_TEMP/$label.headers.normalized"
-            grep -Eiq "^content-security-policy:.*frame-ancestors[[:space:]]+'none'" "$RUNNER_TEMP/$label.headers.normalized"
-            grep -Eiq '^x-frame-options:[[:space:]]*DENY' "$RUNNER_TEMP/$label.headers.normalized"
-            grep -Eiq '^cache-control:.*(private.*no-store|no-store.*private)' "$RUNNER_TEMP/$label.headers.normalized"
-            grep -Eiq '^strict-transport-security:[[:space:]]*max-age=63072000(;|$)' "$RUNNER_TEMP/$label.headers.normalized"
-            grep -Eiq '^x-content-type-options:[[:space:]]*nosniff' "$RUNNER_TEMP/$label.headers.normalized"
-            grep -Eiq '^referrer-policy:[[:space:]]*no-referrer' "$RUNNER_TEMP/$label.headers.normalized"
+              --output "$RUNNER_TEMP/live-routes/$label.body" \
+              --dump-header "$RUNNER_TEMP/live-routes/$label.headers" --write-out '%{http_code}')"
+            printf '%s\n' "$status" > "$RUNNER_TEMP/live-routes/$label.status"
           }
-          run_canary / index
-          run_canary /client client
-          run_canary /staff staff
-          printf '{"paths":["/","/client","/staff"],"mobile":true,"exact_bytes":true,"headers":true,"runtime":"inactive"}\n' > release-evidence/canary-evidence.json
+          capture_route / index
+          capture_route /client client
+          capture_route /staff staff
+          node scripts/ci/verify-live-vercel-canary.mjs \
+            "$RUNNER_TEMP/reviewed-dist" "$RUNNER_TEMP/live-static" "$RUNNER_TEMP/live-artifact-headers" \
+            "$RUNNER_TEMP/live-routes" \
+            release-evidence/canary-evidence.json
 
       - name: Persist full promotion intent before provider mutation
         id: intent
@@ -198,7 +205,7 @@ jobs:
           DEPLOYMENT_ID: ${{ steps.identity.outputs.deployment_id }}
           DEPLOYMENT_URL: ${{ steps.deploy.outputs.url }}
         run: >-
-          node -e 'const fs=require("fs");const e=process.env;const rollback=JSON.parse(fs.readFileSync("release-evidence/rollback-inventory.json","utf8"));const intent={schema:1,repository:e.GITHUB_REPOSITORY,sha:e.RELEASE_SHA.toLowerCase(),run_id:e.GITHUB_RUN_ID,project_id:e.EXPECTED_VERCEL_PROJECT_ID,project_name:e.EXPECTED_VERCEL_PROJECT_NAME,expected_production_alias:e.EXPECTED_PRODUCTION_ALIAS,deployment_id:e.DEPLOYMENT_ID,deployment_url:e.DEPLOYMENT_URL,artifact_sha256:e.ARTIFACT_DIGEST,rollback_deployment_id:rollback.deployment_id,rollback_inventory:rollback,canary_verified:true,runtime:"inactive",status:"promotion_intent",operator_action:"If final evidence is absent or uncertain: Do not retry promotion blindly. Reconcile every alias in rollback_inventory, then roll back only to rollback_deployment_id if needed."};fs.writeFileSync("release-evidence/promotion-intent.json",JSON.stringify(intent)+"\n");fs.writeFileSync("release-evidence/deployment-evidence.json",JSON.stringify(intent)+"\n");'
+          node -e 'const fs=require("fs");const e=process.env;const rollback=JSON.parse(fs.readFileSync("release-evidence/rollback-inventory.json","utf8"));const intent={schema:1,repository:e.GITHUB_REPOSITORY,sha:e.RELEASE_SHA.toLowerCase(),run_id:e.GITHUB_RUN_ID,org_id:e.EXPECTED_VERCEL_ORG_ID,project_id:e.EXPECTED_VERCEL_PROJECT_ID,project_name:e.EXPECTED_VERCEL_PROJECT_NAME,expected_production_alias:e.EXPECTED_PRODUCTION_ALIAS,deployment_id:e.DEPLOYMENT_ID,deployment_url:e.DEPLOYMENT_URL,artifact_sha256:e.ARTIFACT_DIGEST,rollback_deployment_id:rollback.deployment_id,rollback_inventory:rollback,canary_verified:true,runtime:"inactive",status:"promotion_intent",operator_action:"If final evidence is absent or uncertain: Do not retry promotion blindly. Reconcile every alias in rollback_inventory, then roll back only to rollback_deployment_id if needed."};fs.writeFileSync("release-evidence/promotion-intent.json",JSON.stringify(intent)+"\n");fs.writeFileSync("release-evidence/deployment-evidence.json",JSON.stringify(intent)+"\n");'
 
       - name: Retain immutable pre-promotion intent
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

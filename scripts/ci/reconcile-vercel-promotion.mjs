@@ -52,6 +52,7 @@ export async function readPromotionSnapshot({ intent, token, teamId, fetchImpl =
       rollbackAliases.some((item) => !item?.alias || !/^dpl_[A-Za-z0-9]+$/.test(item?.deployment_id || "")) ||
       new Set(rollbackAliases.map((item) => item.alias)).size !== rollbackAliases.length ||
       rollbackInventory.inventory_complete !== true || rollbackInventory.project_id !== intent.project_id ||
+      !intent.org_id || rollbackInventory.org_id !== intent.org_id || teamId !== intent.org_id ||
       rollbackInventory.project_name !== intent.project_name ||
       rollbackInventory.expected_production_alias !== intent.expected_production_alias ||
       rollbackInventory.deployment_id !== intent.rollback_deployment_id ||
@@ -61,7 +62,8 @@ export async function readPromotionSnapshot({ intent, token, teamId, fetchImpl =
   const query = `teamId=${encodeURIComponent(teamId)}`;
   const encodedProjectId = encodeURIComponent(intent.project_id);
   const project = await fetchJson(`/v9/projects/${encodedProjectId}?${query}`, token, fetchImpl);
-  if (project.id !== intent.project_id || project.name !== intent.project_name || project.link != null) {
+  if (project.id !== intent.project_id || project.name !== intent.project_name ||
+      project.accountId !== intent.org_id || project.link != null) {
     throw new Error("Vercel project identity changed during reconciliation");
   }
   const domainsPayload = await fetchJson(`/v9/projects/${encodedProjectId}/domains?limit=100&${query}`, token, fetchImpl);
@@ -99,6 +101,7 @@ export async function readPromotionSnapshot({ intent, token, teamId, fetchImpl =
     provider: {
       project_id: project.id,
       project_name: project.name,
+      org_id: project.accountId,
       inventory_complete: inventoryComplete,
       production_aliases: productionAliases,
       rollback_aliases: rollbackAliases,

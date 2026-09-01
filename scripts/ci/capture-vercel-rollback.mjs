@@ -15,18 +15,19 @@ async function fetchJson(path, token, fetchImpl) {
 export async function captureRollbackInventory({
   token,
   teamId,
+  expectedOrgId,
   projectId,
   projectName,
   expectedProductionAlias,
   fetchImpl = fetch,
 }) {
-  if (!token || !teamId || !projectId || !projectName || !expectedProductionAlias) {
+  if (!token || !teamId || !expectedOrgId || !projectId || !projectName || !expectedProductionAlias || teamId !== expectedOrgId) {
     throw new Error("Vercel rollback inventory configuration is incomplete");
   }
   const query = `teamId=${encodeURIComponent(teamId)}`;
   const encodedProjectId = encodeURIComponent(projectId);
   const project = await fetchJson(`/v9/projects/${encodedProjectId}?${query}`, token, fetchImpl);
-  if (project.id !== projectId || project.name !== projectName || project.link != null) {
+  if (project.id !== projectId || project.name !== projectName || project.accountId !== expectedOrgId || project.link != null) {
     throw new Error("Vercel rollback inventory project identity is not the dedicated non-Git project");
   }
 
@@ -54,6 +55,7 @@ export async function captureRollbackInventory({
 
   return {
     schema: 1,
+    org_id: expectedOrgId,
     project_id: projectId,
     project_name: projectName,
     expected_production_alias: expectedProductionAlias,
@@ -69,6 +71,7 @@ async function main() {
   const inventory = await captureRollbackInventory({
     token: process.env.VERCEL_TOKEN || "",
     teamId: process.env.VERCEL_ORG_ID || "",
+    expectedOrgId: process.env.EXPECTED_VERCEL_ORG_ID || "",
     projectId: process.env.VERCEL_PROJECT_ID || "",
     projectName: process.env.EXPECTED_VERCEL_PROJECT_NAME || "",
     expectedProductionAlias: process.env.EXPECTED_PRODUCTION_ALIAS || "",

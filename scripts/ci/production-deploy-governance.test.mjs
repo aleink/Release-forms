@@ -4,16 +4,21 @@ import { resolve } from "node:path";
 import test from "node:test";
 
 const workflow = readFileSync(resolve(".github/workflows/deploy-vercel-production.yml"), "utf8");
+const liveVerifier = readFileSync(resolve("scripts/ci/verify-live-vercel-canary.mjs"), "utf8");
 
 test("retired release publisher remains manual, default-off, and exact-project bound", () => {
   assert.match(workflow, /workflow_dispatch:/);
   assert.doesNotMatch(workflow, /workflow_run:/);
   assert.match(workflow, /ENABLE_RELEASE_FORMS_PRODUCTION_DEPLOYMENT == 'true'/);
   assert.match(workflow, /PROMOTE RETIRED RELEASE_FORMS/);
+  assert.match(workflow, /EXPECTED_VERCEL_ORG_ID: team_dYh8hnyuxB6dbWOjq34jIHNg/);
   assert.match(workflow, /EXPECTED_VERCEL_PROJECT_ID: prj_AgFYzaxmaGGuLPQnxkeSfzLawwMX/);
   assert.match(workflow, /EXPECTED_VERCEL_PROJECT_NAME: release-forms/);
   assert.match(workflow, /EXPECTED_PRODUCTION_ALIAS: release-forms[.]vercel[.]app/);
   assert.match(workflow, /if\(p[.]link!=null\)throw new Error\("Git integration must be disconnected/);
+  assert.match(workflow, /p[.]accountId!==process[.]env[.]EXPECTED_VERCEL_ORG_ID/);
+  assert.match(workflow, /p[.]orgId!==process[.]env[.]EXPECTED_VERCEL_ORG_ID/);
+  assert.match(workflow, /org_id:e[.]EXPECTED_VERCEL_ORG_ID/);
   assert.match(workflow, /cancel-in-progress: false/);
 });
 
@@ -35,16 +40,14 @@ test("one exact static artifact is canaried and bound before any promotion", () 
   const verify = workflow.indexOf('verify-vercel-output.mjs .vercel/output "$RUNNER_TEMP/reviewed-dist"');
   const deploy = workflow.indexOf("deploy --prebuilt --prod --skip-domain");
   const inspect = workflow.indexOf("vercel@59.10.0 inspect");
-  const exactBytes = workflow.indexOf('cmp --silent "$RUNNER_TEMP/reviewed-dist/index.html"');
+  const exactBytes = workflow.indexOf("verify-live-vercel-canary.mjs");
   const intent = workflow.indexOf("Persist full promotion intent");
   const promote = workflow.indexOf("vercel@59.10.0 promote");
   assert.ok(seal >= 0 && build > seal && verify > build && deploy > verify && inspect > deploy && exactBytes > inspect && intent > exactBytes && promote > intent);
-  assert.match(workflow, /strict-transport-security/);
-  assert.match(workflow, /x-content-type-options/);
-  assert.match(workflow, /referrer-policy/);
-  assert.match(workflow, /content-security-policy/);
-  assert.match(workflow, /x-frame-options/);
-  assert.match(workflow, /cache-control/);
+  assert.match(liveVerifier, /headers[.]length !== 10/);
+  assert.match(liveVerifier, /missing or weakened/);
+  assert.match(workflow, /find [.]+ -type f/);
+  assert.match(workflow, /live-static/);
 });
 
 test("promotion is preceded by exact rollback and main rechecks and always reconciled", () => {

@@ -8,6 +8,7 @@ const client = readFileSync(new URL("lib/supabase.ts", import.meta.url), "utf8")
 const vercel = JSON.parse(readFileSync(new URL("vercel.json", projectRoot), "utf8"));
 const hostingStatus = readFileSync(new URL("docs/HOSTING_STATUS.md", projectRoot), "utf8");
 const deployWorkflow = readFileSync(new URL(".github/workflows/deploy-vercel-production.yml", projectRoot), "utf8");
+const liveCanaryVerifier = readFileSync(new URL("scripts/ci/verify-live-vercel-canary.mjs", projectRoot), "utf8");
 
 function responseHeaders() {
   const rule = vercel.headers.find((candidate) => candidate.source === "/(.*)");
@@ -64,6 +65,8 @@ test("production provider credentials are fail-closed and excluded from install,
   assert.doesNotMatch(providerBuild, /secrets\.VERCEL_(?:TOKEN|ORG_ID|PROJECT_ID)|--token/);
   assert.match(deployWorkflow, /deploy --prebuilt --prod --skip-domain/);
   assert.match(deployWorkflow, /vercel@59\.10\.0 curl "\$path" --deployment "\$DEPLOYMENT_URL"/);
-  assert.match(deployWorkflow, /This standalone form is not active\./);
+  assert.match(deployWorkflow, /verify-live-vercel-canary[.]mjs/);
+  assert.match(liveCanaryVerifier, /live artifact bytes differ/);
+  assert.match(liveCanaryVerifier, /headers[.]length !== 10/);
   assert.match(deployWorkflow, /vercel@59\.10\.0 promote "\$DEPLOYMENT_URL" --yes/);
 });

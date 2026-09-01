@@ -7,7 +7,7 @@ The standalone Vercel application in this repository is not an active Club Tatto
 The manual production workflow exists only as a controlled rollback/retirement boundary. Enabling it requires all of the following:
 
 - written product acceptance for the inactive retirement page;
-- the exact source-pinned `release-forms` Vercel project, disconnected from Git;
+- the exact source-pinned Vercel account and `release-forms` project, disconnected from Git (the workflow independently verifies the account, project, and provider-reported link state);
 - the `Production` environment approval and exact typed confirmation;
 - a full SHA that is still current `main` immediately before promotion;
 - successful exact-artifact, canary, rollback-inventory, and provider-reconciliation gates.

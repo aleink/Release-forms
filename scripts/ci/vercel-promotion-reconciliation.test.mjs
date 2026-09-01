@@ -22,12 +22,14 @@ test("promotion reconciliation distinguishes a definite no-op from ambiguity", (
 });
 
 const intent = {
+  org_id: "team_test",
   project_id: "prj_test",
   project_name: "release-forms",
   expected_production_alias: "release-forms.vercel.app",
   deployment_id: deploymentId,
   rollback_deployment_id: rollbackDeploymentId,
   rollback_inventory: {
+    org_id: "team_test",
     inventory_complete: true,
     project_id: "prj_test",
     project_name: "release-forms",
@@ -40,10 +42,10 @@ const intent = {
   },
 };
 
-function fixtureFetch({ promotePayload, domainsNext = null, domainDeploymentId = deploymentId } = {}) {
+function fixtureFetch({ promotePayload, domainsNext = null, domainDeploymentId = deploymentId, accountId = "team_test" } = {}) {
   const urls = [];
   const responses = new Map([
-    ["https://api.vercel.com/v9/projects/prj_test?teamId=team_test", { id: "prj_test", name: "release-forms", link: null, lastAliasRequest: request("succeeded") }],
+    ["https://api.vercel.com/v9/projects/prj_test?teamId=team_test", { id: "prj_test", name: "release-forms", accountId, link: null, lastAliasRequest: request("succeeded") }],
     ["https://api.vercel.com/v9/projects/prj_test/domains?limit=100&teamId=team_test", { domains: [{ name: "release.example" }], pagination: { next: domainsNext } }],
     ["https://api.vercel.com/v13/deployments/release-forms.vercel.app?teamId=team_test", { id: deploymentId, name: "release-forms", target: "production", readyState: "READY" }],
     ["https://api.vercel.com/v13/deployments/release.example?teamId=team_test", { id: domainDeploymentId, name: "release-forms", target: "production", readyState: "READY" }],
@@ -75,6 +77,8 @@ test("reconciliation fails closed on malformed schema, pagination, or alias drif
   assert.equal((await readPromotionSnapshot({ intent, token: "token", teamId: "team_test", fetchImpl: paginated.fetch })).promotionState, "promotion_uncertain");
   const mixed = fixtureFetch({ domainDeploymentId: rollbackDeploymentId });
   assert.equal((await readPromotionSnapshot({ intent, token: "token", teamId: "team_test", fetchImpl: mixed.fetch })).promotionState, "promotion_uncertain");
+  await assert.rejects(() => readPromotionSnapshot({ intent, token: "token", teamId: "team_other", fetchImpl: fixtureFetch().fetch }), /rollback alias inventory/);
+  await assert.rejects(() => readPromotionSnapshot({ intent, token: "token", teamId: "team_test", fetchImpl: fixtureFetch({ accountId: "team_other" }).fetch }), /project identity changed/);
 });
 
 function sequenceFetch(states) {
@@ -88,7 +92,7 @@ function sequenceFetch(states) {
         stateIndex += 1;
         projectCalls += 1;
         current = states[Math.min(stateIndex, states.length - 1)];
-        return { ok: true, status: 200, json: async () => ({ id: "prj_test", name: "release-forms", link: null, lastAliasRequest: current.request }) };
+        return { ok: true, status: 200, json: async () => ({ id: "prj_test", name: "release-forms", accountId: "team_test", link: null, lastAliasRequest: current.request }) };
       }
       if (url.includes("/v9/projects/prj_test/domains?")) return { ok: true, status: 200, json: async () => ({ domains: [{ name: "release.example" }], pagination: { next: null } }) };
       if (url.includes("/v13/deployments/")) return { ok: true, status: 200, json: async () => ({ id: current.deploymentId, name: "release-forms", target: "production", readyState: "READY" }) };
