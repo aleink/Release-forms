@@ -11,7 +11,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json && vite build && node scripts/verify-production-artifact.mjs",
-    "test:security": "node --test supabase/migrations/security-release-remediation.test.mjs src/lib/supabase.security.test.mjs src/hosting-security.test.mjs",
+    "test:security": "node --test scripts/verify-production-artifact.test.mjs supabase/migrations/security-release-remediation.test.mjs src/lib/supabase.security.test.mjs src/hosting-security.test.mjs",
     "ci:secrets": "node scripts/ci/scan-current-tree-credentials.mjs",
     "preview": "vite preview"
   },

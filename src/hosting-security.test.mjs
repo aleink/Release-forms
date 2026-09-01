@@ -7,6 +7,7 @@ const app = readFileSync(new URL("App.tsx", import.meta.url), "utf8");
 const client = readFileSync(new URL("lib/supabase.ts", import.meta.url), "utf8");
 const vercel = JSON.parse(readFileSync(new URL("vercel.json", projectRoot), "utf8"));
 const hostingStatus = readFileSync(new URL("docs/HOSTING_STATUS.md", projectRoot), "utf8");
+const deployWorkflow = readFileSync(new URL(".github/workflows/deploy-vercel-production.yml", projectRoot), "utf8");
 
 function responseHeaders() {
   const rule = vercel.headers.find((candidate) => candidate.source === "/(.*)");
@@ -42,4 +43,15 @@ test("source does not deploy the raw Vite tree through GitHub Pages", () => {
   assert.match(hostingStatus, /returned `404`/);
   assert.doesNotMatch(hostingStatus, /Provider action still required|must disable Pages/);
   assert.match(hostingStatus, /Do not redirect/);
+});
+
+test("production provider credentials are fail-closed and excluded from install, tests, and source build", () => {
+  const jobEnvironmentStart = deployWorkflow.indexOf("    environment: Production");
+  const jobStepsStart = deployWorkflow.indexOf("    steps:", jobEnvironmentStart);
+  const jobEnvironment = deployWorkflow.slice(jobEnvironmentStart, jobStepsStart);
+  assert.match(deployWorkflow, /environment: Production\n    env:\n      DEPLOYMENT_ENABLED:/);
+  assert.ok(deployWorkflow.indexOf("VERCEL_TOKEN") > deployWorkflow.indexOf("- run: npm run build"));
+  assert.match(deployWorkflow, /Production deployment is enabled but Vercel credentials are incomplete/);
+  assert.match(deployWorkflow, /echo "::error::Production deployment is enabled[^\n]+\n\s+exit 1/);
+  assert.doesNotMatch(jobEnvironment, /VERCEL_(?:TOKEN|ORG_ID|PROJECT_ID)/);
 });
