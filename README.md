@@ -1,6 +1,11 @@
 # Release Forms
 
-Independent release-form app and Supabase backend for Club Tattoo / Inked locations.
+Retained release-form prototype and backend design for Club Tattoo / Inked locations.
+
+> **Not production:** production builds intentionally render an inactive landing
+> page and do not initialize Supabase. The authoritative release-form flow is
+> `https://bookingclubtattoo.com/release_form.html` using studio-issued links.
+> See `docs/HOSTING_STATUS.md` before changing any hosting or activation state.
 
 ## What This Repo Contains
 
@@ -18,7 +23,8 @@ cp .env.example .env.local
 npm run dev
 ```
 
-Add the Supabase project URL and publishable anon key to `.env.local` when the new Supabase backend is created.
+Add the Supabase project URL and publishable anon key to `.env.local` only for
+local development against an approved non-production backend.
 
 The app fails closed when those values or a release token are missing. For an
 explicit synthetic demo during local development only, set

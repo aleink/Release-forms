@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json && vite build",
-    "test:security": "node --test supabase/migrations/security-release-remediation.test.mjs src/lib/supabase.security.test.mjs",
+    "build": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json && vite build && node scripts/verify-production-artifact.mjs",
+    "test:security": "node --test supabase/migrations/security-release-remediation.test.mjs src/lib/supabase.security.test.mjs src/hosting-security.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

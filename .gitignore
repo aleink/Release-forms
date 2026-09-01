@@ -4,5 +4,6 @@ dist
 .env.local
 .DS_Store
 .vite
+.vercel/
 *.log
 *.tsbuildinfo

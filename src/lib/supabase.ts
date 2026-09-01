@@ -13,9 +13,16 @@ const demoModeRequested = import.meta.env.VITE_RELEASE_FORM_DEMO_MODE === "true"
  */
 export const isReleaseFormDemoMode = import.meta.env.MODE !== "production" && demoModeRequested;
 
+/**
+ * This repository is a retained prototype, not the production release-form
+ * service. A production build must remain inert until the authoritative flow
+ * is deliberately consolidated in a separate reviewed change.
+ */
+export const isReleaseFormRuntimeActive = import.meta.env.MODE !== "production";
+
 export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
 
-export const supabase = isSupabaseConfigured
+export const supabase = isReleaseFormRuntimeActive && isSupabaseConfigured
   ? createClient(supabaseUrl!, supabaseAnonKey!)
   : null;
 
@@ -49,6 +56,7 @@ export async function submitPublicReleaseForm(token: string | undefined, payload
     return { id: `DEMO-${crypto.randomUUID()}`, demo: true as const };
   }
 
+  if (!isReleaseFormRuntimeActive) throw unavailableError();
   if (!supabase) throw unavailableError();
   if (!token?.trim() || token === "demo") throw invalidTokenError();
 
@@ -67,6 +75,7 @@ export async function submitPublicReleaseForm(token: string | undefined, payload
 
 export async function signInStaff(email: string, password: string) {
   if (isReleaseFormDemoMode) return { demo: true as const };
+  if (!isReleaseFormRuntimeActive) throw unavailableError();
   if (!supabase) throw unavailableError();
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) throw new Error("Email or password is incorrect.");
