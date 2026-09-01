@@ -20,7 +20,7 @@ test("production promotion rechecks main after the exact canary", () => {
   const workflow = readFileSync(resolve(".github/workflows/deploy-vercel-production.yml"), "utf8");
   const assertions = [...workflow.matchAll(/assert-deploy-sha[.]mjs \"\$RELEASE_SHA\"/g)];
   assert.equal(assertions.length, 2);
-  const canaryIndex = workflow.indexOf("Exact canary returned HTTP");
+  const canaryIndex = workflow.indexOf("Canary exact inactive bytes, headers, and paths");
   const finalAssertionIndex = assertions[1]?.index ?? -1;
   const promoteIndex = workflow.indexOf('vercel@59.10.0 promote');
   assert.ok(canaryIndex >= 0 && finalAssertionIndex > canaryIndex && promoteIndex > finalAssertionIndex);
