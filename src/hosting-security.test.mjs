@@ -31,7 +31,9 @@ test("local CodeQL evidence is fail-closed and uses read-only configured API acc
     assert.match(workflow, /SHA256SUMS[\s\S]*?evidence\.json/);
     assert.match(workflow, /jq -n \\\n\s+--arg repository[\s\S]*?resultCount/);
     assert.doesNotMatch(workflow, /jq -n \+/);
-    assert.match(workflow, /Validated CodeQL SARIF contains \$result_count result/);
+    assert.match(workflow, /node scripts\/ci\/check-codeql-sarif\.mjs codeql-results/);
+    assert.doesNotMatch(workflow, /::warning::Validated CodeQL SARIF/);
+    assert.match(workflow, /if: always\(\)\s+with:\s+name: codeql-sarif-/);
     assert.match(workflow, /path:\s*codeql-results\s*\n\s+if-no-files-found:\s*error/);
   }
 });
