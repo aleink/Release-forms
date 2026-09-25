@@ -49,7 +49,9 @@ jobs:
           base: ''
           head: HEAD
           extra_args: --results=verified
-          version: 3.97.1
+          # Keep the official action; its quoted IMAGE:VERSION supports tag@digest.
+          image: ghcr.io/trufflesecurity/trufflehog
+          version: 3.97.1@sha256:deb2af10659a488a14d262a323addcde099d99827a1cf1dc4e93c17915c39f08
 
   codeql-local-sarif:
     runs-on: ubuntu-latest

@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "verifiedDate": "2026-09-25",
+  "image": "ghcr.io/trufflesecurity/trufflehog",
+  "version": "3.97.1",
+  "actionCommit": "20652fbbdefffcdaa493a5bf57ab2ac6b1db715b",
+  "manifestDigest": "sha256:deb2af10659a488a14d262a323addcde099d99827a1cf1dc4e93c17915c39f08",
+  "linuxAmd64ManifestDigest": "sha256:da3365e98ab735336733fc90cc22af8413a6d9fc1e6da5412e781daeb2d14663",
+  "linuxAmd64ConfigDigest": "sha256:57d589e76c3fe2e2c9fd56fad6198093817707123ed8ada8dfac48748576c9b8",
+  "platforms": [
+    "linux/amd64",
+    "linux/arm64"
+  ],
+  "configCreated": "2026-08-24T17:09:15.958782647Z",
+  "configSource": "https://github.com/trufflesecurity/trufflehog",
+  "configRevision": "20652fbbdefffcdaa493a5bf57ab2ac6b1db715b",
+  "configVersion": "3.97.1",
+  "verification": "Anonymous HTTPS GET from official GHCR; manifest and config byte SHA-256 checked against registry/descriptor digests. Docker manifest inspect independently accepted the exact name:tag@digest and resolved both platform children. No scanner invocation or image-layer download.",
+  "sourceAction": "https://github.com/trufflesecurity/trufflehog/blob/20652fbbdefffcdaa493a5bf57ab2ac6b1db715b/action.yml",
+  "sourceRegistry": "https://ghcr.io/v2/trufflesecurity/trufflehog/manifests/3.97.1",
+  "referenceGrammar": "https://github.com/distribution/reference/blob/main/reference.go",
+  "notes": "The official pinned action quotes IMAGE:VERSION. Docker accepts name:tag@digest; the digest fixes the manifest while the existing tag documents its release. All scan arguments, failures and workflow permissions are unchanged. Updates require a reviewed new digest."
+}
