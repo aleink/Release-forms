@@ -13,6 +13,7 @@ on:
         type: string
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -47,6 +48,54 @@ jobs:
             echo "::error::A full 40-character release SHA is required."
             exit 1
           }
+
+      - name: Admit trusted current-main source before checkout
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = "workflow_dispatch" || {
+            echo "::error::Production admission requires an explicit dispatch."
+            exit 1
+          }
+          release_sha="$(printf '%s' "$RELEASE_SHA" | tr '[:upper:]' '[:lower:]')"
+          [[ "$release_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "::error::A full release SHA is required."
+            exit 1
+          }
+          # This gate belongs to the trusted workflow, never the selected checkout.
+          test "$GITHUB_REF" = "refs/heads/main" &&
+          test "$GITHUB_REF_PROTECTED" = "true" &&
+          test "$GITHUB_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/deploy-vercel-production.yml@refs/heads/main" &&
+          test "$GITHUB_WORKFLOW_SHA" = "$GITHUB_SHA" &&
+          test "$release_sha" = "$GITHUB_SHA" || {
+            echo "::error::Dispatch the protected main workflow at the exact requested release SHA."
+            exit 1
+          }
+          branch_json="$(gh api "repos/$GITHUB_REPOSITORY/branches/main")"
+          jq -e --arg sha "$release_sha" \
+            '.name == "main" and .protected == true and .commit.sha == $sha' \
+            <<<"$branch_json" >/dev/null || {
+              echo "::error::The release is not the current protected main SHA."
+              exit 1
+            }
+          ci_json="$(gh api --method GET \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
+            -f head_sha="$release_sha" -f event=push -f branch=main -f per_page=100)"
+          # Do not filter the API to successful runs: a newer pending/failed run
+          # must not be hidden by an older green result for the same source.
+          jq -e --arg sha "$release_sha" --arg repository "$GITHUB_REPOSITORY" \
+            '.workflow_runs | sort_by(.run_number, .id) | last |
+            (.id | type) == "number" and (.run_number | type) == "number" and
+            .head_sha == $sha and .head_branch == "main" and .event == "push" and
+            .path == ".github/workflows/ci.yml" and
+            .head_repository.full_name == $repository and .repository.full_name == $repository and
+            .status == "completed" and .conclusion == "success"' \
+            <<<"$ci_json" >/dev/null || {
+              echo "::error::The latest exact-SHA main push CI run has not succeeded."
+              exit 1
+            }
 
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
         with:
