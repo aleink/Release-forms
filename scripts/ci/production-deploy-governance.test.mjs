@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import test from "node:test";
+import "./release-admission.test.mjs";
 
 const workflow = readFileSync(resolve(".github/workflows/deploy-vercel-production.yml"), "utf8");
 const liveVerifier = readFileSync(resolve("scripts/ci/verify-live-vercel-canary.mjs"), "utf8");
