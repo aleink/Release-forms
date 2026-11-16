@@ -51,6 +51,13 @@ provider changes too. A detected race is not automatically repaired.
    `Production` GitHub environment. This workflow hard-pins team/project IDs;
    it neither creates credentials nor accepts alternate targets.
 
+Both checkout steps set `persist-credentials: false`. Dependency installation,
+builds and canaries receive no GitHub token. Current-main checks run separately
+with step-scoped read-only `GH_TOKEN`, calling only the fixed GitHub branch and
+exact-source CI APIs; they never fetch with Git, write Git credentials, or give
+the token to a subprocess. The original source/branch-protection/latest-CI checks
+are repeated immediately before the alias write.
+
 ## Stage, then verify/publish the same artifact
 
 Dispatch `deploy-retired-primary-alias.yml` on current protected main with its

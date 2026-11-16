@@ -25,8 +25,8 @@ test("stage and publish both run identical trusted current-main admission before
   assert.equal(blocks.length, 2); assert.equal(blocks[0], blocks[1]);
 });
 test("stage builds without provider credentials and uploads no pulled configuration", () => {
-  for (const name of ["Recheck current main and install without provider credentials", "Build once and seal exact inactive production bytes"])
-    assert.doesNotMatch(step(name), /secrets\.|VERCEL_TOKEN|RETIRED_ALIAS_CANARY_ACCESS/);
+  for (const name of ["Install and retest without provider credentials", "Build once and seal exact inactive production bytes"])
+    assert.doesNotMatch(step(name), /secrets\.|VERCEL_TOKEN|RETIRED_ALIAS_CANARY_ACCESS|GH_TOKEN|github.token/);
   assert.match(step("Stage production artifact without assigning aliases"), /deploy --prebuilt --prod --skip-domain/);
   assert.match(step("Bind every provider file and immutable single-alias intent"), /capture-vercel-deployment-files\.mjs/);
   assert.match(step("Retain immutable staged artifact for this exact run"), /path: stage-artifact\n/);
@@ -49,8 +49,26 @@ test("canary precedes immutable write arm and alias-only write; immutable arm pr
   assert.match(arm, /name: retired-primary-alias-write-armed-\$\{\{ github.run_id }}/);
   assert.match(arm, /overwrite: false/);
   assert.doesNotMatch(arm, /name:.*github.run_attempt/);
-  assert.match(step(names[3]), /assert-deploy-sha\.mjs/);
+  assert.match(step("Recheck current protected main immediately before the alias write"), /assert-retired-deploy-sha\.mjs/);
+  assert.ok(workflow.indexOf("Recheck current protected main immediately before the alias write") > indexes[2]);
+  assert.ok(workflow.indexOf("Recheck current protected main immediately before the alias write") < indexes[3]);
   assert.match(step(names[3]), /continue-on-error: true/);
+});
+test("both checkouts discard Git credentials and GitHub auth is confined to read-only checks", () => {
+  const checkouts = workflow.split(/\n(?=      - )/).filter(part => part.includes("- uses: actions/checkout@"));
+  assert.equal(checkouts.length, 2);
+  for (const checkout of checkouts) assert.match(checkout, /persist-credentials: false/);
+  assert.doesNotMatch(workflow, /assert-deploy-sha\.mjs|git fetch|git config/);
+  const steps = workflow.split(/\n(?=      - )/);
+  const authenticated = steps.filter(part => /GH_TOKEN:/.test(part));
+  assert.equal(authenticated.length, 6); // Two pre-checkout admissions + four isolated current-main checks.
+  for (const checked of authenticated) {
+    assert.match(checked, /GH_TOKEN: \$\{\{ github.token }}/);
+    assert.doesNotMatch(checked, /npm |npx |VERCEL_TOKEN|secrets\.|retired-alias-canary\.mjs|retired-single-alias\.mjs/);
+  }
+  for (const name of ["Install and retest without provider credentials", "Build once and seal exact inactive production bytes",
+    "Verify exact staged bytes and headers without automatic access changes", "Verify the public target without any bypass",
+    "Assign only release-forms.vercel.app once"]) assert.doesNotMatch(step(name), /GH_TOKEN|github.token/);
 });
 test("only exact staged canary gets optional access, public canary stays credential-free", () => {
   assert.match(step("Verify exact staged bytes and headers without automatic access changes"), /secrets.RETIRED_ALIAS_CANARY_ACCESS/);

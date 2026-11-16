@@ -100,16 +100,21 @@ jobs:
         with:
           ref: ${{ inputs.release_sha }}
           fetch-depth: 0
+          persist-credentials: false
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
 
-      - name: Recheck current main and install without provider credentials
+      - name: Verify current main before installing dependencies
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/ci/assert-retired-deploy-sha.mjs "$RELEASE_SHA"
+
+      - name: Install and retest without provider credentials
         shell: bash
         run: |
           set -euo pipefail
-          node scripts/ci/assert-deploy-sha.mjs "$RELEASE_SHA"
           npm ci
           npm audit --audit-level=high
           npm run ci:secrets
@@ -252,10 +257,16 @@ jobs:
         with:
           ref: ${{ inputs.release_sha }}
           fetch-depth: 0
+          persist-credentials: false
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
+
+      - name: Verify current main after credential-free publish checkout
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/ci/assert-retired-deploy-sha.mjs "$RELEASE_SHA"
 
       - name: Download only this run's immutable staged artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -270,7 +281,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node scripts/ci/assert-deploy-sha.mjs "$RELEASE_SHA"
           test "$(node scripts/ci/retired-alias-canary.mjs digest stage-artifact/prebuilt)" = "$EXPECTED_ARTIFACT_DIGEST"
           node scripts/ci/verify-vercel-output.mjs stage-artifact/prebuilt stage-artifact/reviewed-dist
           node -e 'const i=JSON.parse(require("fs").readFileSync("stage-artifact/release-evidence/single-alias-intent.json"));if(i.sha!==process.env.RELEASE_SHA.toLowerCase()||i.run_id!==process.env.GITHUB_RUN_ID||i.artifact_sha256!==process.env.EXPECTED_ARTIFACT_DIGEST)throw Error("Wrong staged source, run, or artifact")'
@@ -302,7 +312,9 @@ jobs:
           publish-evidence/canary-evidence.json
 
       - name: Recheck current protected main immediately before arming
-        run: node scripts/ci/assert-deploy-sha.mjs "$RELEASE_SHA"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/ci/assert-retired-deploy-sha.mjs "$RELEASE_SHA"
 
       - name: Arm one alias write with immutable evidence
         id: arm
@@ -316,6 +328,11 @@ jobs:
           overwrite: false
           retention-days: 90
 
+      - name: Recheck current protected main immediately before the alias write
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/ci/assert-retired-deploy-sha.mjs "$RELEASE_SHA"
+
       - name: Assign only release-forms.vercel.app once
         id: assign
         continue-on-error: true
@@ -325,7 +342,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node scripts/ci/assert-deploy-sha.mjs "$RELEASE_SHA"
           node scripts/ci/retired-single-alias.mjs assign \
             publish-evidence/single-alias-intent.json publish-evidence/canary-evidence.json \
             publish-evidence/alias-attempt.json publish-evidence/alias-result.json
