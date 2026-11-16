@@ -134,7 +134,8 @@ export function validateIntent(intent) {
 }
 
 export function createIntent({ baseline, inventory, inventoryBytes, sha, runId, artifactSha256 }) {
-  assert(inventory?.schema === 1 && inventory.complete === true && inventory.source === "vercel-v6-deployment-files" &&
+  assert((inventory?.schema === 1 || (inventory?.schema === 2 && inventory.prebuilt_format === "retired-cli-59.10.0" &&
+    ["", "src/"].includes(inventory.provider_path_prefix))) && inventory.complete === true && inventory.source === "vercel-v6-deployment-files" &&
     inventory.org_id === TARGET.orgId && inventory.project_id === TARGET.projectId && inventory.project_name === TARGET.projectName,
   "Unbound provider file inventory");
   return validateIntent({ schema: 1, operation: "retired-primary-alias-only", repository: TARGET.repository,

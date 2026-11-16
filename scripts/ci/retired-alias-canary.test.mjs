@@ -54,6 +54,25 @@ test("missing protected-deployment access stops on first response without bypass
     assert.equal(count, 1);
   } finally { clean(f); }
 });
+test("known unauthenticated Vercel SSO redirect is classified without following or exposing its query", async () => {
+  for(const publicAlias of [false,true]){
+    const f=fixture();let calls=0;try{
+      const location="https://vercel.com/sso-api?url=synthetic&nonce=private-fixture";
+      await assert.rejects(runCanary({...f,publicAlias,fetchImpl:async()=>{calls++;return new Response(null,{status:302,headers:{Location:location}});}}),
+        error=>error.message.includes(publicAlias?"no bypass is permitted":"CANARY_ACCESS_REQUIRED")&&!error.message.includes("private-fixture"));
+      assert.equal(calls,1);
+    }finally{clean(f);}
+  }
+});
+test("other redirect hosts and paths remain generic failures, not accepted authentication paths",async()=>{
+  for(const location of ["https://example.com/sso-api","https://vercel.com/another","https://user@vercel.com/sso-api","https://vercel.com:444/sso-api"]){
+    const f=fixture();let calls=0;try{
+      await assert.rejects(runCanary({...f,fetchImpl:async()=>{calls++;return new Response(null,{status:302,headers:{Location:location}});}}),
+        error=>error.message.includes("without following redirects")&&!error.message.includes("CANARY_ACCESS_REQUIRED"));
+      assert.equal(calls,1);
+    }finally{clean(f);}
+  }
+});
 test("temporary credential accepts only exact already-approved short-lived envelope", () => {
   const f = fixture(); try {
     assert.equal(temporaryShareAccess(JSON.stringify(f.envelope), f.intent, "2", now), f.envelope.token);

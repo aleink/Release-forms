@@ -176,7 +176,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node scripts/ci/capture-vercel-deployment-files.mjs stage-artifact/reviewed-dist .vercel/output stage-artifact/release-evidence/deployment-file-inventory.json
+          node scripts/ci/capture-vercel-deployment-files.mjs stage-artifact/reviewed-dist .vercel/output stage-artifact/release-evidence/deployment-file-inventory.json --retired-project-token
           node scripts/ci/retired-single-alias.mjs intent stage-artifact/release-evidence/alias-baseline.json stage-artifact/release-evidence/deployment-file-inventory.json stage-artifact/release-evidence/single-alias-intent.json
           node scripts/ci/retired-single-alias.mjs check stage-artifact/release-evidence/single-alias-intent.json
 
@@ -299,7 +299,7 @@ jobs:
           set -euo pipefail
           export DEPLOYMENT_ID="$(jq -er .deployment_id publish-evidence/single-alias-intent.json)"
           export DEPLOYMENT_URL="$(jq -er .deployment_url publish-evidence/single-alias-intent.json)"
-          node scripts/ci/capture-vercel-deployment-files.mjs stage-artifact/reviewed-dist stage-artifact/prebuilt "$RUNNER_TEMP/current-deployment-file-inventory.json"
+          node scripts/ci/capture-vercel-deployment-files.mjs stage-artifact/reviewed-dist stage-artifact/prebuilt "$RUNNER_TEMP/current-deployment-file-inventory.json" --retired-project-token
           cmp --silent publish-evidence/deployment-file-inventory.json "$RUNNER_TEMP/current-deployment-file-inventory.json"
           node scripts/ci/retired-single-alias.mjs check publish-evidence/single-alias-intent.json
 
