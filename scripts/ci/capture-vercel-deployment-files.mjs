@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { lstatSync, readdirSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -9,6 +10,7 @@ const MAX_TREE_ENTRIES = 256;
 const MAX_TREE_DEPTH = 16;
 const PREBUILT_PREFIX = ".vercel/output";
 const STATIC_PREFIX = `${PREBUILT_PREFIX}/static/`;
+export const RETIRED_PREBUILT_FORMAT = "retired-cli-59.10.0";
 const ID_PATTERN = /^(?:dpl|prj|team)_[A-Za-z0-9]+$/;
 
 const assertIdentifier = (value, prefix, label) => {
@@ -110,6 +112,28 @@ export const flattenDeploymentFileTree = (tree) => {
   return { files: files.sort(), directories: directories.sort() };
 };
 
+// No generic prefix stripping. The complete provider tree must be either the
+// exact upload tree or exactly one sole virtual src directory around that tree.
+export function matchProviderTree(remote, expected, allowSourceEnvelope = false) {
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  for (const prefix of allowSourceEnvelope ? ["", "src/"] : [""]) {
+    const files = expected.files.map(path => prefix + path).sort();
+    const directories = [...(prefix ? ["src"] : []), ...expected.directories.map(path => prefix + path)].sort();
+    if (same(remote.files, files) && same(remote.directories, directories)) return prefix;
+  }
+  const error = new Error("Vercel complete deployment file tree differs from the exact reviewed prebuilt output");
+  error.inventoryDiagnostics = {
+    schema: 1, reason: "exact-provider-tree-mismatch", source_envelope_allowed: allowSourceEnvelope,
+    expected_file_count: expected.files.length, provider_file_count: remote.files.length,
+    expected_directory_count: expected.directories.length, provider_directory_count: remote.directories.length,
+    expected_file_path_sha256: expected.files.map(path => createHash("sha256").update(path).digest("hex")),
+    expected_directory_path_sha256: expected.directories.map(path => createHash("sha256").update(path).digest("hex")),
+    provider_file_path_sha256: remote.files.map(path => createHash("sha256").update(path).digest("hex")),
+    provider_directory_path_sha256: remote.directories.map(path => createHash("sha256").update(path).digest("hex")),
+  };
+  throw error;
+}
+
 const readJsonResponse = async (response, label) => {
   if (!response || typeof response.arrayBuffer !== "function") throw new Error(`${label} returned an invalid response`);
   if (!response.ok) throw new Error(`${label} failed with HTTP ${response.status}`);
@@ -151,10 +175,15 @@ export async function captureDeploymentFileInventory({
   token,
   fetchImpl = fetch,
   apiOrigin = API_ORIGIN,
+  retiredProjectToken = false,
 }) {
   assertIdentifier(deploymentId, "dpl", "deployment ID");
   assertIdentifier(projectId, "prj", "project ID");
   assertIdentifier(orgId, "team", "organization ID");
+  if (retiredProjectToken && (projectId !== "prj_AgFYzaxmaGGuLPQnxkeSfzLawwMX" ||
+    orgId !== "team_dYh8hnyuxB6dbWOjq34jIHNg" || projectName !== "release-forms")) {
+    throw new Error("Retired source-envelope mode is limited to the exact retired project");
+  }
   if (typeof projectName !== "string" || !/^[a-z0-9][a-z0-9-]{0,99}$/.test(projectName)) {
     throw new Error("project name is invalid");
   }
@@ -188,21 +217,29 @@ export async function captureDeploymentFileInventory({
   const localOutput = realTree(prebuiltRoot, "reviewed Vercel prebuilt output");
   const expectedProviderFiles = localOutput.files.map((path) => `${PREBUILT_PREFIX}/${path}`).sort();
   const expectedProviderDirectories = [".vercel", PREBUILT_PREFIX, ...localOutput.directories.map((path) => `${PREBUILT_PREFIX}/${path}`)].sort();
-  if (JSON.stringify(remote.files) !== JSON.stringify(expectedProviderFiles) ||
-      JSON.stringify(remote.directories) !== JSON.stringify(expectedProviderDirectories)) {
-    throw new Error("Vercel complete deployment file tree differs from the exact reviewed prebuilt output");
-  }
+  const providerPathPrefix = matchProviderTree(remote, { files: expectedProviderFiles, directories: expectedProviderDirectories }, retiredProjectToken);
 
   const reviewed = realTree(reviewedRoot, "reviewed static artifact");
-  const servedFiles = remote.files.filter((path) => path.startsWith(STATIC_PREFIX)).map((path) => path.slice(STATIC_PREFIX.length)).sort();
-  const servedDirectories = remote.directories.filter((path) => path.startsWith(STATIC_PREFIX)).map((path) => path.slice(STATIC_PREFIX.length)).sort();
+  if (retiredProjectToken) {
+    const exactFiles = ["builds.json", "config.json", "diagnostics/cli_traces.json", "diagnostics/deploy-manifest.json",
+      "diagnostics/project-manifest.json", ...reviewed.files.map(path => `static/${path}`)].sort();
+    const exactDirectories = ["diagnostics", "static", ...reviewed.directories.map(path => `static/${path}`)].sort();
+    if (JSON.stringify(localOutput.files) !== JSON.stringify(exactFiles) ||
+        JSON.stringify(localOutput.directories) !== JSON.stringify(exactDirectories)) {
+      throw new Error("Retired provider capture requires the exact static-only CLI output format");
+    }
+  }
+  const staticPrefix = providerPathPrefix + STATIC_PREFIX;
+  const servedFiles = remote.files.filter((path) => path.startsWith(staticPrefix)).map((path) => path.slice(staticPrefix.length)).sort();
+  const servedDirectories = remote.directories.filter((path) => path.startsWith(staticPrefix)).map((path) => path.slice(staticPrefix.length)).sort();
   if (JSON.stringify(servedFiles) !== JSON.stringify(reviewed.files) ||
       JSON.stringify(servedDirectories) !== JSON.stringify(reviewed.directories)) {
     throw new Error("Vercel complete deployed static path set differs from the exact reviewed artifact");
   }
 
   return {
-    schema: 1,
+    schema: retiredProjectToken ? 2 : 1,
+    ...(retiredProjectToken ? { prebuilt_format: RETIRED_PREBUILT_FORMAT, provider_path_prefix: providerPathPrefix } : {}),
     source: "vercel-v6-deployment-files",
     complete: true,
     pagination: { kind: "single_recursive_tree", pages: 1, continuation: null },
@@ -219,11 +256,14 @@ export async function captureDeploymentFileInventory({
 }
 
 async function main() {
-  const [reviewedRoot, prebuiltRoot, evidencePath] = process.argv.slice(2).map((path) => path && resolve(path));
+  const [reviewedRoot, prebuiltRoot, evidencePath] = process.argv.slice(2, 5).map((path) => path && resolve(path));
+  const mode = process.argv[5];
+  if ((mode && mode !== "--retired-project-token") || process.argv.length > 6) throw new Error("Unknown provider capture mode");
   if (!reviewedRoot || !prebuiltRoot || !evidencePath) {
     throw new Error("reviewed artifact, prebuilt output, and evidence paths are required");
   }
-  const result = await captureDeploymentFileInventory({
+  let result;
+  try { result = await captureDeploymentFileInventory({
     reviewedRoot,
     prebuiltRoot,
     deploymentId: process.env.DEPLOYMENT_ID,
@@ -232,7 +272,14 @@ async function main() {
     projectName: process.env.EXPECTED_VERCEL_PROJECT_NAME,
     orgId: process.env.EXPECTED_VERCEL_ORG_ID,
     token: process.env.VERCEL_TOKEN,
-  });
+    retiredProjectToken: mode === "--retired-project-token",
+  }); } catch (error) {
+    if (error.inventoryDiagnostics) {
+      writeFileSync(`${evidencePath}.mismatch.json`, `${JSON.stringify(error.inventoryDiagnostics)}\n`, { flag: "wx", mode: 0o600 });
+      console.error("Exact provider path diagnostics retained; no release mutation permitted.");
+    }
+    throw error;
+  }
   writeFileSync(evidencePath, `${JSON.stringify(result)}\n`, { flag: "wx", mode: 0o600 });
   console.log("Captured and verified the complete provider deployment file tree.");
 }

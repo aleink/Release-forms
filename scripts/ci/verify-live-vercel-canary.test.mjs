@@ -93,6 +93,34 @@ test("live canary accepts the exact complete artifact and ten-header matrix", ()
   }
 });
 
+const retiredInventory = (inventory, prefix="src/") => {
+  inventory.schema=2;inventory.prebuilt_format="retired-cli-59.10.0";inventory.provider_path_prefix=prefix;
+  inventory.provider_files.push(".vercel/output/diagnostics/deploy-manifest.json",".vercel/output/diagnostics/project-manifest.json");
+  inventory.provider_files=inventory.provider_files.map(x=>prefix+x).sort();
+  inventory.provider_directories=inventory.provider_directories.map(x=>prefix+x);
+  if(prefix)inventory.provider_directories.push("src");inventory.provider_directories.sort();
+};
+test("retired canary accepts only explicit8-file format and preserves raw src provenance", () => {
+  for(const prefix of ["","src/"]){const f=fixture();try{retiredInventory(f.deploymentInventory,prefix);
+    assert.throws(()=>verifyLiveCanary(f),/provider deployment file inventory/);
+    assert.equal(verifyLiveCanary({...f,retiredProjectToken:true}).provider_inventory_complete,true);
+    for(const [key,field]of[["orgId","org_id"],["projectId","project_id"],["projectName","project_name"]]){
+      const identity={...f.expectedIdentity,[key]:"different"};
+      assert.throws(()=>verifyLiveCanary({...f,retiredProjectToken:true,expectedIdentity:identity,
+        deploymentInventory:{...f.deploymentInventory,[field]:"different"}}),/provider deployment file inventory/);
+    }
+  }finally{rmSync(f.parent,{recursive:true,force:true});}}
+});
+test("retired canary rejects mixed source wrappers, metadata drift, extra files and omitted diagnostics", () => {
+  for(const mutate of [i=>i.provider_path_prefix="other/",i=>i.provider_path_prefix="",i=>i.prebuilt_format="other",
+    i=>i.provider_files.pop(),i=>i.provider_files.push("src/.vercel/output/functions/hidden.func"),
+    i=>i.provider_directories.push("src/empty"),i=>i.provider_files[0]=i.provider_files[0].slice(4),i=>i.extra={}]){
+    const f=fixture();try{retiredInventory(f.deploymentInventory);mutate(f.deploymentInventory);
+      assert.throws(()=>verifyLiveCanary({...f,retiredProjectToken:true}),/provider deployment file inventory/);
+    }finally{rmSync(f.parent,{recursive:true,force:true});}
+  }
+});
+
 test("live canary rejects incomplete, extra-path, or wrong-deployment provider inventory", () => {
   for (const mutate of [
     (inventory) => { inventory.complete = false; },

@@ -44,6 +44,15 @@ export function temporaryShareAccess(rawEnvelope, intent, publishAttempt, now = 
   return envelope.token;
 }
 
+function isVercelAuthenticationRedirect(response) {
+  if (![302, 307].includes(response.status)) return false;
+  try {
+    const destination = new URL(response.headers.get("location"));
+    return destination.origin === "https://vercel.com" && destination.pathname === "/sso-api" &&
+      !destination.username && !destination.password;
+  } catch { return false; }
+}
+
 // Share links can exchange their query token for a host-only share-session
 // cookie. Permit only that one-hop same-origin/same-path exchange. These are
 // newly approved share-session cookies, never exported browser login cookies.
@@ -54,6 +63,9 @@ export async function fetchShareResource({ url, token, fetchImpl, revalidate = (
     headers: { "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) Mobile/15E148 Safari/604.1" } };
   let response = await fetchImpl(authenticatedUrl, options);
   if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+  // Classification only: return the protected status, never follow the SSO URL
+  // or persist its query values, and never create/access a bypass automatically.
+  if (!token && isVercelAuthenticationRedirect(response)) return response;
   assert(token, "Unauthenticated canary redirect is not allowed");
   const location = response.headers.get("location");
   assert(typeof location === "string", "Share handshake has no redirect location");
@@ -93,8 +105,9 @@ export async function runCanary({ intent, inventory, inventoryBytes, reviewedRoo
     try {
       response = await fetchShareResource({ url: new URL(path, origin), token: access(), fetchImpl, revalidate: access });
     } catch { throw new Error("Canary request failed without following redirects; no alias mutation is authorized"); }
-    assert(response.status === 200, [401, 403].includes(response.status) ?
-      "CANARY_ACCESS_REQUIRED: protected staged deployment; no alias mutation attempted and no bypass created" :
+    assert(response.status === 200, ([401, 403].includes(response.status) || isVercelAuthenticationRedirect(response)) ?
+      (publicAlias ? "Public alias unexpectedly requires authentication; no bypass is permitted" :
+        "CANARY_ACCESS_REQUIRED: protected staged deployment; no alias mutation attempted and no bypass created") :
       `Inactive canary returned HTTP ${response.status}`);
     const body = Buffer.from(await response.arrayBuffer());
     assert(body.length <= 4 * 1024 * 1024, "Canary response exceeds static artifact bound");
@@ -118,7 +131,7 @@ export async function runCanary({ intent, inventory, inventoryBytes, reviewedRoo
     writeFileSync(resolve(routeRoot, `${label}.status`), "200\n", { flag: "wx" });
   }
   const result = verifyLiveCanary({ reviewedRoot, liveStaticRoot: staticRoot, artifactHeadersRoot: headersRoot,
-    routeRoot, deploymentInventory: inventory, expectedIdentity: { orgId: TARGET.orgId, projectId: TARGET.projectId,
+    routeRoot, deploymentInventory: inventory, retiredProjectToken: true, expectedIdentity: { orgId: TARGET.orgId, projectId: TARGET.projectId,
       projectName: TARGET.projectName, deploymentId: intent.deployment_id, deploymentUrl: intent.deployment_url } });
   const additionalRoutes = ["/formtest", "/manager"];
   for (const path of additionalRoutes) {

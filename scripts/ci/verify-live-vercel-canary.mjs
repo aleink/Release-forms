@@ -3,6 +3,7 @@ import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { TARGET } from "./retired-single-alias.mjs";
 
 const projectRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 
@@ -45,23 +46,32 @@ const exactInventoryKeys = [
   "project_id", "project_name", "provider_directories", "provider_files", "schema", "source",
 ].sort();
 
-const validateInventory = (inventory, reviewedFiles, reviewedDirectories, expectedIdentity) => {
+const validateInventory = (inventory, reviewedFiles, reviewedDirectories, expectedIdentity, retiredProjectToken) => {
+  const retired = retiredProjectToken === true && inventory?.schema === 2;
+  const prefix = retired ? inventory.provider_path_prefix : "";
+  const extraDiagnostics = retired ? [".vercel/output/diagnostics/deploy-manifest.json", ".vercel/output/diagnostics/project-manifest.json"] : [];
   const expectedProviderFiles = [
     ".vercel/output/builds.json",
     ".vercel/output/config.json",
     ".vercel/output/diagnostics/cli_traces.json",
+    ...extraDiagnostics,
     ...reviewedFiles.map((path) => `.vercel/output/static/${path}`),
-  ].sort();
+  ].map(path => prefix + path).sort();
   const expectedProviderDirectories = [
     ".vercel",
     ".vercel/output",
     ".vercel/output/diagnostics",
     ".vercel/output/static",
     ...reviewedDirectories.map((path) => `.vercel/output/static/${path}`),
-  ].sort();
+  ].map(path => prefix + path);
+  if (prefix === "src/") expectedProviderDirectories.push("src");
+  expectedProviderDirectories.sort();
+  const expectedKeys = retired ? [...exactInventoryKeys, "prebuilt_format", "provider_path_prefix"].sort() : exactInventoryKeys;
   if (!inventory || typeof inventory !== "object" || Array.isArray(inventory) ||
-      JSON.stringify(Object.keys(inventory).sort()) !== JSON.stringify(exactInventoryKeys) ||
-      inventory.schema !== 1 || inventory.source !== "vercel-v6-deployment-files" || inventory.complete !== true ||
+      JSON.stringify(Object.keys(inventory).sort()) !== JSON.stringify(expectedKeys) ||
+      (!retired && inventory.schema !== 1) || (retired && (inventory.prebuilt_format !== "retired-cli-59.10.0" || !["", "src/"].includes(prefix) ||
+        expectedIdentity.orgId !== TARGET.orgId || expectedIdentity.projectId !== TARGET.projectId || expectedIdentity.projectName !== TARGET.projectName)) ||
+      inventory.source !== "vercel-v6-deployment-files" || inventory.complete !== true ||
       JSON.stringify(inventory.pagination) !== JSON.stringify({ kind: "single_recursive_tree", pages: 1, continuation: null }) ||
       inventory.org_id !== expectedIdentity.orgId || inventory.project_id !== expectedIdentity.projectId ||
       inventory.project_name !== expectedIdentity.projectName || inventory.deployment_id !== expectedIdentity.deploymentId ||
@@ -74,7 +84,7 @@ const validateInventory = (inventory, reviewedFiles, reviewedDirectories, expect
   }
 };
 
-export function verifyLiveCanary({ reviewedRoot, liveStaticRoot, artifactHeadersRoot, routeRoot, deploymentInventory, expectedIdentity }) {
+export function verifyLiveCanary({ reviewedRoot, liveStaticRoot, artifactHeadersRoot, routeRoot, deploymentInventory, expectedIdentity, retiredProjectToken = false }) {
   const reviewedFiles = realFiles(reviewedRoot, "reviewed artifact");
   const reviewedDirectories = [];
   const collectDirectories = (directory) => {
@@ -88,7 +98,7 @@ export function verifyLiveCanary({ reviewedRoot, liveStaticRoot, artifactHeaders
     }
   };
   collectDirectories(reviewedRoot);
-  validateInventory(deploymentInventory, reviewedFiles, reviewedDirectories, expectedIdentity);
+  validateInventory(deploymentInventory, reviewedFiles, reviewedDirectories, expectedIdentity, retiredProjectToken);
   const liveFiles = realFiles(liveStaticRoot, "live artifact");
   if (JSON.stringify(liveFiles) !== JSON.stringify(reviewedFiles)) {
     throw new Error("live artifact file manifest differs from the exact reviewed artifact");

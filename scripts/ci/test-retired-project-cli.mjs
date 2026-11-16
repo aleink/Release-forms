@@ -9,8 +9,10 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, syml
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { TARGET } from "./retired-single-alias.mjs";
+import { TARGET, captureAliases, createIntent, assignPrimary, reconcile } from "./retired-single-alias.mjs";
 import { prepareProject, verifyLocalLink, identifyCandidate } from "./retired-project-token.mjs";
+import { captureDeploymentFileInventory } from "./capture-vercel-deployment-files.mjs";
+import { artifactDigest, runCanary } from "./retired-alias-canary.mjs";
 const source = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const cli = resolve(process.argv[2] ?? "missing-cli");
 assert.equal(JSON.parse(readFileSync(resolve(dirname(cli), "../package.json"))).version, "59.10.0");
@@ -30,6 +32,14 @@ const d = { id: "dpl_OfflineSynthetic", url: "release-forms-offline-synthetic.ve
   ownerId: TARGET.orgId, name: TARGET.projectName, target: "production", readyState: "READY", status: "READY",
   aliasAssigned: true, alias: [], prebuilt: true, meta: { githubCommitSha: sha } };
 let denyStatus = 404, createCount = 0, phase = "", violations = [], calls = [], hashes = new Map();
+const directory = (name, children) => ({ name, type: "directory", mode: 0o040755, children });
+const providerTree = () => {
+  const walk = path => readdirSync(path, { withFileTypes: true }).map(entry => entry.isDirectory()
+    ? directory(entry.name, walk(join(path, entry.name)))
+    : { name: entry.name, type: "file", mode: 0o100644, uid: createHash("sha1").update(readFileSync(join(path, entry.name))).digest("hex") });
+  // Derived response shape: complete observed provider projection has this sole src wrapper.
+  return [directory("src", [directory(".vercel", [directory("output", walk(join(cwd, ".vercel/output")))])])];
+};
 const server = createServer(async (request, response) => {
   try {
     const chunks = []; for await (const chunk of request) chunks.push(chunk);
@@ -67,6 +77,7 @@ const server = createServer(async (request, response) => {
       } else if (request.method === "POST" && url.pathname === "/v2/files") {
         assert.deepEqual(raw, hashes.get(request.headers["x-now-digest"])); out = {};
       } else if (request.method === "GET" && url.pathname === `/v13/deployments/${d.id}`) out = d;
+      else if (request.method === "GET" && url.pathname === `/v6/deployments/${d.id}/files`) out = providerTree();
       else if (request.method === "GET" && url.pathname === `/v3/now/deployments/${d.id}/events`) out = [];
       else throw new Error("Unexpected endpoint");
     }
@@ -111,11 +122,52 @@ try {
     assert.ok(slice.some(x => x.path === `/v13/deployments/${d.id}`));
     assert.deepEqual(tree(join(cwd, ".vercel/output")), before, "CLI changed sealed prebuilt bytes");
   }
+  phase = "full-governed-pipeline";
+  const inventory = await captureDeploymentFileInventory({ reviewedRoot: join(cwd,"dist"), prebuiltRoot: join(cwd,".vercel/output"),
+    deploymentId:d.id,deploymentUrl:`https://${d.url}`,projectId:TARGET.projectId,projectName:TARGET.projectName,orgId:TARGET.orgId,
+    token:fake,apiOrigin:`http://127.0.0.1:${port}`,retiredProjectToken:true });
+  assert.equal(inventory.schema,2);assert.equal(inventory.provider_path_prefix,"src/");assert.equal(inventory.provider_files.length,8);
+  const inventoryBytes=Buffer.from(JSON.stringify(inventory));
+  const aliases=Array.from({length:21},(_,i)=>({alias:i===0?TARGET.alias:`release-forms-sibling-${i}.vercel.app`,uid:`fixture-${i}`,
+    projectId:TARGET.projectId,deploymentId:i===0?TARGET.priorDeploymentId:`dpl_DifferentSibling${i}`,redirect:null,redirectStatusCode:null}));
+  const originalSiblings=structuredClone(aliases.slice(1));let writes=0,attemptRecorded=false;
+  const api=async(path,body)=>{
+    if(body){assert.equal(path,`/v2/deployments/${d.id}/aliases`);assert.deepEqual(body,{alias:TARGET.alias,redirect:null});
+      assert.equal(attemptRecorded,true);writes++;assert.equal(writes,1);aliases[0].deploymentId=d.id;return{alias:TARGET.alias,uid:aliases[0].uid};}
+    if(path===`/v9/projects/${TARGET.projectId}`)return fixture;
+    if(path.startsWith("/v4/aliases?"))return{aliases:structuredClone(aliases),pagination:{count:21,next:null}};
+    if(path.startsWith(`/v4/aliases/${TARGET.alias}?`))return structuredClone(aliases[0]);
+    if(path===`/v13/deployments/${d.id}`)return d;
+    if(path===`/v13/deployments/${TARGET.priorDeploymentId}`)return{...d,id:TARGET.priorDeploymentId,meta:{githubCommitSha:TARGET.priorSourceSha}};
+    throw new Error("Unexpected offline release API");
+  };
+  const baseline=await captureAliases(api);
+  const intent=createIntent({baseline,inventory,inventoryBytes,sha,runId:"123",artifactSha256:artifactDigest(join(cwd,".vercel/output"))});
+  const headers=Object.fromEntries(JSON.parse(readFileSync(join(cwd,"vercel.json"))).headers[0].headers.map(h=>[h.key,h.value]));
+  const http=async(url,options)=>{
+    assert.ok([`https://${d.url}`,`https://${TARGET.alias}`].includes(url.origin));
+    assert.equal(url.search,"");assert.equal(options.redirect,"manual");assert.ok(!options.headers?.Authorization && !options.headers?.Cookie);
+    const file=inventory.files.includes(url.pathname.slice(1))?url.pathname.slice(1):"index.html";
+    return new Response(readFileSync(join(cwd,"dist",file)),{status:200,headers});
+  };
+  const canaryArgs={intent,inventory,inventoryBytes,reviewedRoot:join(cwd,"dist"),fetchImpl:http};
+  const staged=await runCanary({...canaryArgs,outputRoot:join(owned,"staged-canary")});assert.equal(writes,0);
+  const assigned=await assignPrimary({api,intent,canary:staged,confirmation:`CHANGE ONLY ${TARGET.alias}`,recordAttempt:()=>{attemptRecorded=true;}});
+  assert.equal(assigned.status,"alias_assigned");assert.equal(writes,1);
+  const publicResult=await runCanary({...canaryArgs,publicAlias:true,outputRoot:join(owned,"public-canary")});
+  assert.equal(publicResult.public_alias,TARGET.alias);assert.equal(publicResult.exact_bytes,true);assert.equal(publicResult.headerCount,10);
+  assert.equal((await reconcile(api,intent)).status,"candidate_mapped");assert.deepEqual(aliases.slice(1),originalSiblings);
+  const refreshed=await captureDeploymentFileInventory({reviewedRoot:join(cwd,"dist"),prebuiltRoot:join(cwd,".vercel/output"),
+    deploymentId:d.id,deploymentUrl:`https://${d.url}`,projectId:TARGET.projectId,projectName:TARGET.projectName,orgId:TARGET.orgId,
+    token:fake,apiOrigin:`http://127.0.0.1:${port}`,retiredProjectToken:true});
+  assert.equal(JSON.stringify(refreshed),inventoryBytes.toString());
   phase = "unsupported-pull"; assert.notEqual((await run(["pull", "--yes", "--environment=production"])).code, 0);
   phase = "unsupported-inspect"; assert.notEqual((await run(["inspect", d.url, "--json"])).code, 0);
   phase = "unsupported-scope"; assert.notEqual((await run(["deploy", "--prebuilt", "--prod", "--skip-domain", "--scope=gemandi"])).code, 0);
   assert.equal(await identifyCandidate(async path => {assert.equal(path, `/v13/deployments/${d.url}`);return d;}, `https://${d.url}`, sha),d.id);
   assert.deepEqual(violations, []);
   console.log(JSON.stringify({ cli: "59.10.0", build: "credential-free, optional unauthenticated startup lookup denied", deploy: "upload + status passed with account resources denied 404 and 403",
-    noTeamAccess: true, sealedBytesUnchanged: true, legacyPullInspectScope: "correctly rejected", requests: calls }, null, 2));
+    noTeamAccess: true, sealedBytesUnchanged: true, legacyPullInspectScope: "correctly rejected",
+    fullPipeline:"wrapped 8-file inventory → source-bound intent → staged/public exact-byte ten-header canaries → ONE mock alias assignment → all21 mapping reconciliation",
+    requests: calls }, null, 2));
 } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); rmSync(owned, { recursive: true, force: true }); }

@@ -101,6 +101,44 @@ Vite 6.4.6 framework metadata and a single filesystem handler after the ten
 headers and before the SPA rewrite, so only the already-verified static files
 can be served. Unknown diagnostic/provider behavior fails closed.
 
+### Complete provider file-tree envelope
+
+The [v6 deployment-files API](https://vercel.com/docs/rest-api/deployments/list-deployment-files)
+returns a recursive source tree. The first successful project-only stage
+(`43855846015`, source `e58c5567de65440045771520ba894467030f02ed`) passed strict
+identity/tree parsing, but its file-set comparison stopped because every path
+was under `src/.vercel/output/`, not `.vercel/output/`. The complete connected
+tool projection showed exactly eight files, with no omissions or truncation.
+The checked-in connector fixture preserves that projection and its UIDs; its
+test directory nodes are **derived**, not claimed to be a captured raw API response.
+
+Only the explicit retired capture mode accepts this proven wrapper. After the
+existing strict recursive parser, the entire path/directory set must equal
+either the sealed prebuilt tree directly, or exactly one sole `src` directory
+around that same tree. No arbitrary prefix stripping, mixed roots, extra empty
+directories, functions, partial tree, unknown fields or unlisted paths pass.
+Schema-2 receipts retain every unmodified provider file/directory path and an
+explicit `provider_path_prefix` (`""` or `"src/"`) plus the exact retired format.
+The intent hashes the whole receipt, and the page verifier independently checks
+the exact eight-file format, prefix and three served static files. The original
+schema-1 path and old publisher remain strict and unchanged. Schema 2 additionally
+requires an explicit retired-mode call and the exact retired team/project/name;
+the default shared page verifier rejects it.
+
+On an exact-set mismatch, capture retains bounded counts and SHA-256 path hashes
+`.mismatch.json` beside the intended evidence file; it contains no file contents,
+raw unexpected filenames, environment values, HTTP authorization or access tokens.
+It still fails closed.
+The full offline integration test now carries actual CLI output through the
+wrapped provider inventory, immutable intent, staged/public exact-byte and
+ten-header canaries, one mock primary-alias assignment and all-21-alias
+reconciliation (including different sibling deployment IDs). It creates no
+provider resource or temporary access and does not authorize a live retry.
+An unauthenticated 302/307 to the exact Vercel `/sso-api` endpoint is classified
+as `CANARY_ACCESS_REQUIRED` for staging without following it or logging its
+query. The public-alias check instead fails as unexpectedly protected; it never
+allows a bypass. Other redirects remain forbidden.
+
 Both checkout steps set `persist-credentials: false`. Dependency installation,
 builds and canaries receive no GitHub token. Current-main checks run separately
 with step-scoped read-only `GH_TOKEN`, calling only the fixed GitHub branch and

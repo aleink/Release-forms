@@ -1,0 +1,17 @@
+{
+  "provenance": "Complete connected Vercel list_deployment_files projection captured 2026-11-16; NOT a raw recursive API response. Tests derive directory nodes and modes. Live strict raw flatten succeeded before exact path comparison failed.",
+  "run_id": 43855846015,
+  "deployment_id": "dpl_7nqKn1ge6pTu13nVNgTuU5cjqFwQ",
+  "source_sha": "e58c5567de65440045771520ba894467030f02ed",
+  "context": { "totalFiles": 8, "returnedFiles": 8, "truncated": false },
+  "files": [
+    { "path": "src/.vercel/output/builds.json", "uid": "9b875fd527e028eda886f4419ba5979fe684c145" },
+    { "path": "src/.vercel/output/config.json", "uid": "6c0ac2ab92ff22a5fbcfb4e937a9298e76347a4c" },
+    { "path": "src/.vercel/output/diagnostics/cli_traces.json", "uid": "264c5712e8fac14e1b8d4b3a15c11665d258d7cf" },
+    { "path": "src/.vercel/output/diagnostics/deploy-manifest.json", "uid": "e6464ffb97db472181e8d74eb5c5c1a096cf899f" },
+    { "path": "src/.vercel/output/diagnostics/project-manifest.json", "uid": "bba5dc186689b4c66bccd2846b8d4c63bdd24380" },
+    { "path": "src/.vercel/output/static/assets/index-Cxc_L-pF.js", "uid": "b416d073896212147ceacf7a8a765a803d6445ce" },
+    { "path": "src/.vercel/output/static/assets/index-M4U0x3Q8.css", "uid": "132581e5e11bacf8df8b2ebaae9ffd281950e767" },
+    { "path": "src/.vercel/output/static/index.html", "uid": "a7dd12ea6e33b724796638b880ae7e6e06ad5853" }
+  ]
+}

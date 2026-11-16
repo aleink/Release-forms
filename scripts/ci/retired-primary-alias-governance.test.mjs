@@ -42,6 +42,7 @@ test("project-token lane never uses scope, CLI pull/inspect, env API or project-
   assert.match(step("Stage production artifact without assigning aliases"), /retired-project-token\.mjs identify/);
   assert.doesNotMatch(step("Stage production artifact without assigning aliases"), /npx|npm install|--api/);
   assert.equal((workflow.match(/verify-vercel-output\.mjs[^\n]+--retired-project-token/g) ?? []).length, 2);
+  assert.equal((workflow.match(/capture-vercel-deployment-files\.mjs[^\n]+--retired-project-token/g) ?? []).length, 2);
 });
 test("publish is source-bound, artifact-ID-bound and performs no rebuild", () => {
   const publish = workflow.split("  publish:\n")[1];
