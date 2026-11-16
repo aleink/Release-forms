@@ -8,6 +8,8 @@ const outputRoot = resolve(process.argv[2] || ".vercel/output");
 const scriptRoot = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(scriptRoot, "../..");
 const reviewedArtifactRoot = resolve(process.argv[3] || resolve(projectRoot, "dist"));
+const retiredProjectToken = process.argv[4] === "--retired-project-token";
+if (process.argv[4] && !retiredProjectToken) throw new Error("Unknown Vercel output verification mode");
 
 const expectDirectory = (path, label) => {
   const stats = lstatSync(path);
@@ -32,8 +34,48 @@ expectEntries(outputRoot, ["builds.json", "config.json", "diagnostics", "static"
 expectFile(resolve(outputRoot, "builds.json"), "Vercel builds metadata");
 expectFile(resolve(outputRoot, "config.json"), "Vercel output config");
 expectDirectory(resolve(outputRoot, "diagnostics"), "Vercel diagnostics");
-expectEntries(resolve(outputRoot, "diagnostics"), ["cli_traces.json"], "Vercel diagnostics");
+expectEntries(resolve(outputRoot, "diagnostics"), retiredProjectToken
+  ? ["cli_traces.json", "project-manifest.json", "deploy-manifest.json"] : ["cli_traces.json"], "Vercel diagnostics");
 expectFile(resolve(outputRoot, "diagnostics", "cli_traces.json"), "Vercel CLI diagnostics");
+if (retiredProjectToken) {
+  // Genuine 59.10 static-builder diagnostics, never served runtime capabilities.
+  for (const name of ["project-manifest.json", "deploy-manifest.json"])
+    expectFile(resolve(outputRoot, "diagnostics", name), name);
+  const manifest = JSON.parse(readFileSync(resolve(outputRoot, "diagnostics/project-manifest.json"), "utf8"));
+  const deploy = JSON.parse(readFileSync(resolve(outputRoot, "diagnostics/deploy-manifest.json"), "utf8"));
+  const key = "@vercel/static-build:.";
+  const info = manifest[key];
+  const keys = value => Object.keys(value ?? {}).sort().join(",");
+  const expectedKeys = ["version", "runtime", "framework", "runtimeVersion", "dependencies", "buildType", "workspace", "builder"].sort().join(",");
+  if (keys(manifest) !== key || keys(info) !== expectedKeys || info.version !== "20260304" || info.runtime !== "node" ||
+    info.framework !== "vite" || info.buildType !== "api-dir" || info.workspace !== "." || info.builder !== "@vercel/static-build" ||
+    JSON.stringify(info.runtimeVersion) !== JSON.stringify({ resolved: "22", requested: "22.23.x", requestedSource: "package.json" }) ||
+    !Array.isArray(info.dependencies) || info.dependencies.length === 0 || info.dependencies.length > 512 ||
+    keys(deploy) !== ["manifestVersion", "builds", "services"].sort().join(",") || deploy.manifestVersion !== "2.0" ||
+    keys(deploy.builds) !== key || keys(deploy.services) !== "") throw new Error("Unexpected retired static diagnostic manifest");
+  const { version, workspace, ...rest } = info;
+  if (JSON.stringify(deploy.builds[key]) !== JSON.stringify({ ...rest, root: workspace, builder: info.builder })) {
+    // Compare canonical keys because the CLI's two truthful serializations use different property order.
+    const actual = deploy.builds[key];
+    const expected = { ...rest, root: workspace, builder: info.builder };
+    if (keys(actual) !== keys(expected) || Object.keys(expected).some(k => JSON.stringify(actual[k]) !== JSON.stringify(expected[k])))
+      throw new Error("Static project/deploy diagnostic manifests disagree");
+  }
+  const lock = JSON.parse(readFileSync(resolve(projectRoot, "package-lock.json"), "utf8"));
+  const seen = new Set();
+  for (const dependency of info.dependencies) {
+    const allowed = ["name", "type", "scopes", "requested", "resolved", "source", "sourceUrl"];
+    const pinned = lock.packages[`node_modules/${dependency.name}`];
+    if (Object.keys(dependency).some(k => !allowed.includes(k)) || typeof dependency.name !== "string" || seen.has(dependency.name) ||
+      !pinned || dependency.resolved !== pinned.version || !["direct", "transitive"].includes(dependency.type) ||
+      !Array.isArray(dependency.scopes) || dependency.scopes.some(s => !["prod", "dev", "optional"].includes(s)) ||
+      dependency.source !== "registry" || dependency.sourceUrl !== "https://registry.npmjs.org")
+      throw new Error("Static diagnostic dependency differs from the reviewed lockfile");
+    seen.add(dependency.name);
+  }
+  const pinnedNames = Object.keys(lock.packages).filter(name => name.startsWith("node_modules/")).map(name => name.slice("node_modules/".length)).sort();
+  if (JSON.stringify([...seen].sort()) !== JSON.stringify(pinnedNames)) throw new Error("Static diagnostic dependency inventory is incomplete");
+}
 expectDirectory(resolve(outputRoot, "static"), "Vercel static root");
 
 const sourceConfig = JSON.parse(readFileSync(resolve(projectRoot, "vercel.json"), "utf8"));
@@ -50,6 +92,7 @@ const expectedRoutes = sourceConfig.headers.map(({ source, headers }) => ({
   headers: Object.fromEntries(headers.map(({ key, value }) => [key, value])),
   continue: true,
 }));
+if (retiredProjectToken) expectedRoutes.push({ handle: "filesystem" });
 expectedRoutes.push(
   { src: outputSource(sourceConfig.rewrites[0].source), dest: sourceConfig.rewrites[0].destination, check: true },
   { handle: "error" },
@@ -58,7 +101,8 @@ expectedRoutes.push(
 
 const config = JSON.parse(readFileSync(resolve(outputRoot, "config.json"), "utf8"));
 if (config.version !== 3 || !Array.isArray(config.routes) || !Array.isArray(config.crons) || config.crons.length !== 0 ||
-    JSON.stringify(Object.keys(config).sort()) !== JSON.stringify(["crons", "routes", "version"])) {
+    JSON.stringify(Object.keys(config).sort()) !== JSON.stringify(retiredProjectToken ? ["crons", "framework", "routes", "version"] : ["crons", "routes", "version"]) ||
+    (retiredProjectToken && JSON.stringify(config.framework) !== JSON.stringify({ slug: "vite", version: "6.4.6" }))) {
   throw new Error("Vercel output config must remain a static version-3 artifact without extra capabilities");
 }
 if (JSON.stringify(config.routes) !== JSON.stringify(expectedRoutes)) {

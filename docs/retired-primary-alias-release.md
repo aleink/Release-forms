@@ -47,9 +47,59 @@ provider changes too. A detected race is not automatically repaired.
 3. Keep `ENABLE_RELEASE_FORMS_PRODUCTION_DEPLOYMENT` unset/false. Never enable
    the old project-wide publisher. Enable only the new repository/environment
    variable `ENABLE_RETIRED_PRIMARY_ALIAS_DEPLOYMENT=true` after approval.
-4. Reuse the existing privileged `VERCEL_TOKEN` in the main-only protected
-   `Production` GitHub environment. This workflow hard-pins team/project IDs;
-   it neither creates credentials nor accepts alternate targets.
+4. The operator supplies the separately approved, short-lived **project-only**
+   `VERCEL_TOKEN` in the main-only protected `Production` GitHub environment,
+   then revokes it and removes the secret immediately after the attempt. Do not
+   reuse an expired/revoked token or broaden to team/account scope. This workflow
+   hard-pins team/project IDs; it neither creates credentials nor accepts alternate targets.
+
+### Project-only CLI compatibility (59.10.0)
+
+The published CLI's `--scope` resolves `/v2/user`; `pull` also resolves the team,
+and `inspect` unconditionally resolves account context. Those endpoints are not
+authorized by a [project-only token](https://vercel.com/docs/accounts/access-tokens).
+Deleting `--scope` alone is therefore insufficient. The retired lane now:
+
+- Fetches only the exact `/v9/projects/{projectId}` via the existing pinned API
+  client. It verifies owner/name, disconnected Git and the reviewed static
+  settings; it never fetches project environment variables. It writes a fresh
+  local CLI link with the exact project/team/name and an explicitly empty build
+  environment. The provider's Node 24 setting is preserved; the existing source
+  engine and local CI remain Node 22.23.2. The local install command is a no-op
+  because locked installation/audit already completed without credentials.
+- Installs exact CLI 59.10.0 without credentials or install scripts, before the
+  privileged deployment step. Actual credential-free `vercel build --prod`
+  creates genuine CLI/static-builder metadata. No provenance is fabricated.
+- Uses `deploy --prebuilt --prod --skip-domain --yes` with the validated local
+  link, no `--scope` and no `VERCEL_ORG_ID`/`VERCEL_PROJECT_ID` overrides. In this
+  version those overrides discard the link's project-name fast path. The
+  existing exact team/project guards remain mandatory. An empty job-specific
+  global config prevents ambient account context; no automatic linking occurs.
+- Identifies the returned deployment using the project-scoped `/v13/deployments/{host}`
+  GET, binding exact URL, project/team/name, READY/production/prebuilt and source
+  SHA. All existing complete provider file, source, canary and sibling checks
+  still run before the sole alias write.
+
+`test-retired-project-cli.mjs` runs the actual pinned package under a loopback-only
+socket guard with no inherited credentials/config. It denies user/team resources
+with both 404 and 403, proves missing-file uploads and queued-to-READY polling,
+asserts exact team/project/prebuilt/domain-skip fields and unchanged sealed bytes,
+and confirms the old pull/inspect/scope commands fail. The CLI still makes an
+optional startup `/v2/user` lookup; a denied result is swallowed by the published
+CLI and no account permission is granted. The build makes that optional lookup
+without a credential. This test runs in CI and again in the staging job.
+
+The new retired-only verifier mode admits exactly the two additional genuine
+59.10 static-builder diagnostic manifests. It validates their complete locked
+dependency inventory and agreement, no services, and static builder/runtime.
+With the existing `Other` framework setting the CLI labels the diagnostic build
+`api-dir`; this is metadata, **not permission to deploy an API**. The output root
+still forbids functions or other capabilities and retains the exact three
+static files, ten headers and route allowlist. The old publisher's verifier mode
+and disabled state are unchanged. The new mode also pins the exact CLI-generated
+Vite 6.4.6 framework metadata and a single filesystem handler after the ten
+headers and before the SPA rewrite, so only the already-verified static files
+can be served. Unknown diagnostic/provider behavior fails closed.
 
 Both checkout steps set `persist-credentials: false`. Dependency installation,
 builds and canaries receive no GitHub token. Current-main checks run separately
