@@ -128,21 +128,27 @@ jobs:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         run: node scripts/ci/retired-single-alias.mjs snapshot stage-artifact/release-evidence/alias-baseline.json
 
-      - name: Pull only the pinned production configuration
+      - name: Install and exercise pinned CLI without provider credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/retired-vercel-cli" --ignore-scripts --no-audit --no-fund vercel@59.10.0
+          mkdir "$RUNNER_TEMP/retired-vercel-config"
+          node scripts/ci/test-retired-project-cli.mjs "$RUNNER_TEMP/retired-vercel-cli/node_modules/vercel/dist/index.js"
+
+      - name: Prepare only the pinned project settings with an empty build environment
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID: team_dYh8hnyuxB6dbWOjq34jIHNg
-          VERCEL_PROJECT_ID: prj_AgFYzaxmaGGuLPQnxkeSfzLawwMX
-        run: npx --yes vercel@59.10.0 pull --yes --environment=production --scope=gemandi
+        run: node scripts/ci/retired-project-token.mjs prepare
 
       - name: Build once and seal exact inactive production bytes
         id: build
         shell: bash
         run: |
           set -euo pipefail
-          node -e 'const p=JSON.parse(require("fs").readFileSync(".vercel/project.json"));if(p.orgId!==process.env.EXPECTED_VERCEL_ORG_ID||p.projectId!==process.env.EXPECTED_VERCEL_PROJECT_ID)throw Error("Wrong linked project")'
-          npx --yes vercel@59.10.0 build --prod
-          node scripts/ci/verify-vercel-output.mjs .vercel/output stage-artifact/reviewed-dist
+          node scripts/ci/retired-project-token.mjs check
+          node "$RUNNER_TEMP/retired-vercel-cli/node_modules/vercel/dist/index.js" build --prod --global-config "$RUNNER_TEMP/retired-vercel-config"
+          node scripts/ci/verify-vercel-output.mjs .vercel/output stage-artifact/reviewed-dist --retired-project-token
           artifact_digest="$(node scripts/ci/retired-alias-canary.mjs digest .vercel/output)"
           echo "artifact_digest=$artifact_digest" >> "$GITHUB_OUTPUT"
           echo "ARTIFACT_DIGEST=$artifact_digest" >> "$GITHUB_ENV"
@@ -152,16 +158,14 @@ jobs:
         id: deploy
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID: team_dYh8hnyuxB6dbWOjq34jIHNg
-          VERCEL_PROJECT_ID: prj_AgFYzaxmaGGuLPQnxkeSfzLawwMX
         shell: bash
         run: |
           set -euo pipefail
-          deployment_url="$(npx --yes vercel@59.10.0 deploy --prebuilt --prod --skip-domain --scope=gemandi --meta githubCommitSha="$RELEASE_SHA")"
+          node scripts/ci/retired-project-token.mjs check
+          deployment_url="$(node "$RUNNER_TEMP/retired-vercel-cli/node_modules/vercel/dist/index.js" deploy --prebuilt --prod --skip-domain --yes --global-config "$RUNNER_TEMP/retired-vercel-config" --meta githubCommitSha="$RELEASE_SHA")"
           [[ "$deployment_url" =~ ^https://release-forms-[a-z0-9-]+[.]vercel[.]app$ ]]
           echo "url=$deployment_url" >> "$GITHUB_OUTPUT"
-          npx --yes vercel@59.10.0 inspect "$deployment_url" --json --scope=gemandi > "$RUNNER_TEMP/retired-candidate.json"
-          deployment_id="$(jq -er '.id | select(test("^dpl_[A-Za-z0-9]+$"))' "$RUNNER_TEMP/retired-candidate.json")"
+          deployment_id="$(node scripts/ci/retired-project-token.mjs identify "$deployment_url")"
           echo "deployment_id=$deployment_id" >> "$GITHUB_OUTPUT"
 
       - name: Bind every provider file and immutable single-alias intent
@@ -282,7 +286,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(node scripts/ci/retired-alias-canary.mjs digest stage-artifact/prebuilt)" = "$EXPECTED_ARTIFACT_DIGEST"
-          node scripts/ci/verify-vercel-output.mjs stage-artifact/prebuilt stage-artifact/reviewed-dist
+          node scripts/ci/verify-vercel-output.mjs stage-artifact/prebuilt stage-artifact/reviewed-dist --retired-project-token
           node -e 'const i=JSON.parse(require("fs").readFileSync("stage-artifact/release-evidence/single-alias-intent.json"));if(i.sha!==process.env.RELEASE_SHA.toLowerCase()||i.run_id!==process.env.GITHUB_RUN_ID||i.artifact_sha256!==process.env.EXPECTED_ARTIFACT_DIGEST)throw Error("Wrong staged source, run, or artifact")'
           mkdir publish-evidence
           cp stage-artifact/release-evidence/*.json publish-evidence/

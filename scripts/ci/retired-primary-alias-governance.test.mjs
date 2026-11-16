@@ -25,12 +25,23 @@ test("stage and publish both run identical trusted current-main admission before
   assert.equal(blocks.length, 2); assert.equal(blocks[0], blocks[1]);
 });
 test("stage builds without provider credentials and uploads no pulled configuration", () => {
-  for (const name of ["Install and retest without provider credentials", "Build once and seal exact inactive production bytes"])
+  for (const name of ["Install and retest without provider credentials", "Install and exercise pinned CLI without provider credentials", "Build once and seal exact inactive production bytes"])
     assert.doesNotMatch(step(name), /secrets\.|VERCEL_TOKEN|RETIRED_ALIAS_CANARY_ACCESS|GH_TOKEN|github.token/);
   assert.match(step("Stage production artifact without assigning aliases"), /deploy --prebuilt --prod --skip-domain/);
   assert.match(step("Bind every provider file and immutable single-alias intent"), /capture-vercel-deployment-files\.mjs/);
   assert.match(step("Retain immutable staged artifact for this exact run"), /path: stage-artifact\n/);
   assert.doesNotMatch(workflow, /cp[^\n]*\.vercel\/(?:project|\.env)|path: \.vercel/);
+});
+test("project-token lane never uses scope, CLI pull/inspect, env API or project-ID overrides", () => {
+  assert.doesNotMatch(workflow, /--scope|--team|^\s+VERCEL_ORG_ID:|^\s+VERCEL_PROJECT_ID:|\bvercel@59\.10\.0 (?:pull|inspect)/m);
+  assert.match(step("Prepare only the pinned project settings with an empty build environment"), /retired-project-token\.mjs prepare/);
+  const install = step("Install and exercise pinned CLI without provider credentials");
+  assert.match(install, /--ignore-scripts --no-audit --no-fund vercel@59\.10\.0/);
+  assert.match(install, /test-retired-project-cli\.mjs/);
+  assert.match(step("Stage production artifact without assigning aliases"), /retired-project-token\.mjs check/);
+  assert.match(step("Stage production artifact without assigning aliases"), /retired-project-token\.mjs identify/);
+  assert.doesNotMatch(step("Stage production artifact without assigning aliases"), /npx|npm install|--api/);
+  assert.equal((workflow.match(/verify-vercel-output\.mjs[^\n]+--retired-project-token/g) ?? []).length, 2);
 });
 test("publish is source-bound, artifact-ID-bound and performs no rebuild", () => {
   const publish = workflow.split("  publish:\n")[1];
