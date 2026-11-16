@@ -1,0 +1,394 @@
+name: Deploy Retired Primary Alias Only
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Full current protected-main SHA for the inactive retired app
+        required: true
+        type: string
+      confirmation:
+        description: Type CHANGE ONLY release-forms.vercel.app
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+# Serialize with the old publisher, which MUST remain disabled.
+concurrency:
+  group: production-vercel-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  EXPECTED_VERCEL_ORG_ID: team_dYh8hnyuxB6dbWOjq34jIHNg
+  EXPECTED_VERCEL_PROJECT_ID: prj_AgFYzaxmaGGuLPQnxkeSfzLawwMX
+  EXPECTED_VERCEL_PROJECT_NAME: release-forms
+  EXPECTED_PRODUCTION_ALIAS: release-forms.vercel.app
+  RELEASE_SHA: ${{ inputs.release_sha }}
+
+jobs:
+  stage:
+    if: vars.ENABLE_RETIRED_PRIMARY_ALIAS_DEPLOYMENT == 'true' && vars.ENABLE_RELEASE_FORMS_PRODUCTION_DEPLOYMENT != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: Production
+    outputs:
+      artifact_id: ${{ steps.staged.outputs.artifact-id }}
+      artifact_digest: ${{ steps.build.outputs.artifact_digest }}
+    steps:
+      - name: Require the one-alias confirmation
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRMATION" = "CHANGE ONLY release-forms.vercel.app"
+          test "$GITHUB_REPOSITORY" = "aleink/Release-forms"
+
+      - name: Admit trusted current-main source before checkout
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = "workflow_dispatch" || {
+            echo "::error::Production admission requires an explicit dispatch."
+            exit 1
+          }
+          release_sha="$(printf '%s' "$RELEASE_SHA" | tr '[:upper:]' '[:lower:]')"
+          [[ "$release_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "::error::A full release SHA is required."
+            exit 1
+          }
+          # This gate belongs to the trusted workflow, never the selected checkout.
+          test "$GITHUB_REF" = "refs/heads/main" &&
+          test "$GITHUB_REF_PROTECTED" = "true" &&
+          test "$GITHUB_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/deploy-retired-primary-alias.yml@refs/heads/main" &&
+          test "$GITHUB_WORKFLOW_SHA" = "$GITHUB_SHA" &&
+          test "$release_sha" = "$GITHUB_SHA" || {
+            echo "::error::Dispatch the protected main workflow at the exact requested release SHA."
+            exit 1
+          }
+          branch_json="$(gh api "repos/$GITHUB_REPOSITORY/branches/main")"
+          jq -e --arg sha "$release_sha" \
+            '.name == "main" and .protected == true and .commit.sha == $sha' \
+            <<<"$branch_json" >/dev/null || {
+              echo "::error::The release is not the current protected main SHA."
+              exit 1
+            }
+          ci_json="$(gh api --method GET \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
+            -f head_sha="$release_sha" -f event=push -f branch=main -f per_page=100)"
+          # Do not filter the API to successful runs: a newer pending/failed run
+          # must not be hidden by an older green result for the same source.
+          jq -e --arg sha "$release_sha" --arg repository "$GITHUB_REPOSITORY" \
+            '.workflow_runs | sort_by(.run_number, .id) | last |
+            (.id | type) == "number" and (.run_number | type) == "number" and
+            .head_sha == $sha and .head_branch == "main" and .event == "push" and
+            .path == ".github/workflows/ci.yml" and
+            .head_repository.full_name == $repository and .repository.full_name == $repository and
+            .status == "completed" and .conclusion == "success"' \
+            <<<"$ci_json" >/dev/null || {
+              echo "::error::The latest exact-SHA main push CI run has not succeeded."
+              exit 1
+            }
+
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Verify current main before installing dependencies
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/ci/assert-retired-deploy-sha.mjs "$RELEASE_SHA"
+
+      - name: Install and retest without provider credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm audit --audit-level=high
+          npm run ci:secrets
+          npm run test:security
+          npm run build
+          mkdir -p stage-artifact/release-evidence
+          cp -a dist stage-artifact/reviewed-dist
+
+      - name: Pin complete prior mappings and the non-Git retired project
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: node scripts/ci/retired-single-alias.mjs snapshot stage-artifact/release-evidence/alias-baseline.json
+
+      - name: Pull only the pinned production configuration
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: team_dYh8hnyuxB6dbWOjq34jIHNg
+          VERCEL_PROJECT_ID: prj_AgFYzaxmaGGuLPQnxkeSfzLawwMX
+        run: npx --yes vercel@59.10.0 pull --yes --environment=production --scope=gemandi
+
+      - name: Build once and seal exact inactive production bytes
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e 'const p=JSON.parse(require("fs").readFileSync(".vercel/project.json"));if(p.orgId!==process.env.EXPECTED_VERCEL_ORG_ID||p.projectId!==process.env.EXPECTED_VERCEL_PROJECT_ID)throw Error("Wrong linked project")'
+          npx --yes vercel@59.10.0 build --prod
+          node scripts/ci/verify-vercel-output.mjs .vercel/output stage-artifact/reviewed-dist
+          artifact_digest="$(node scripts/ci/retired-alias-canary.mjs digest .vercel/output)"
+          echo "artifact_digest=$artifact_digest" >> "$GITHUB_OUTPUT"
+          echo "ARTIFACT_DIGEST=$artifact_digest" >> "$GITHUB_ENV"
+          cp -a .vercel/output stage-artifact/prebuilt
+
+      - name: Stage production artifact without assigning aliases
+        id: deploy
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: team_dYh8hnyuxB6dbWOjq34jIHNg
+          VERCEL_PROJECT_ID: prj_AgFYzaxmaGGuLPQnxkeSfzLawwMX
+        shell: bash
+        run: |
+          set -euo pipefail
+          deployment_url="$(npx --yes vercel@59.10.0 deploy --prebuilt --prod --skip-domain --scope=gemandi --meta githubCommitSha="$RELEASE_SHA")"
+          [[ "$deployment_url" =~ ^https://release-forms-[a-z0-9-]+[.]vercel[.]app$ ]]
+          echo "url=$deployment_url" >> "$GITHUB_OUTPUT"
+          npx --yes vercel@59.10.0 inspect "$deployment_url" --json --scope=gemandi > "$RUNNER_TEMP/retired-candidate.json"
+          deployment_id="$(jq -er '.id | select(test("^dpl_[A-Za-z0-9]+$"))' "$RUNNER_TEMP/retired-candidate.json")"
+          echo "deployment_id=$deployment_id" >> "$GITHUB_OUTPUT"
+
+      - name: Bind every provider file and immutable single-alias intent
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          DEPLOYMENT_ID: ${{ steps.deploy.outputs.deployment_id }}
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/ci/capture-vercel-deployment-files.mjs stage-artifact/reviewed-dist .vercel/output stage-artifact/release-evidence/deployment-file-inventory.json
+          node scripts/ci/retired-single-alias.mjs intent stage-artifact/release-evidence/alias-baseline.json stage-artifact/release-evidence/deployment-file-inventory.json stage-artifact/release-evidence/single-alias-intent.json
+          node scripts/ci/retired-single-alias.mjs check stage-artifact/release-evidence/single-alias-intent.json
+
+      - name: Retain immutable staged artifact for this exact run
+        id: staged
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: retired-primary-alias-stage-${{ github.run_id }}
+          path: stage-artifact
+          include-hidden-files: true
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 90
+
+      - name: Retain failed-stage evidence without configuration or credentials
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: retired-primary-alias-stage-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: stage-artifact/release-evidence
+          if-no-files-found: ignore
+          overwrite: false
+          retention-days: 90
+
+  publish:
+    needs: stage
+    if: vars.ENABLE_RETIRED_PRIMARY_ALIAS_DEPLOYMENT == 'true' && vars.ENABLE_RELEASE_FORMS_PRODUCTION_DEPLOYMENT != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: Production
+    steps:
+      - name: Admit trusted current-main source before checkout
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = "workflow_dispatch" || {
+            echo "::error::Production admission requires an explicit dispatch."
+            exit 1
+          }
+          release_sha="$(printf '%s' "$RELEASE_SHA" | tr '[:upper:]' '[:lower:]')"
+          [[ "$release_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "::error::A full release SHA is required."
+            exit 1
+          }
+          # This gate belongs to the trusted workflow, never the selected checkout.
+          test "$GITHUB_REF" = "refs/heads/main" &&
+          test "$GITHUB_REF_PROTECTED" = "true" &&
+          test "$GITHUB_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/deploy-retired-primary-alias.yml@refs/heads/main" &&
+          test "$GITHUB_WORKFLOW_SHA" = "$GITHUB_SHA" &&
+          test "$release_sha" = "$GITHUB_SHA" || {
+            echo "::error::Dispatch the protected main workflow at the exact requested release SHA."
+            exit 1
+          }
+          branch_json="$(gh api "repos/$GITHUB_REPOSITORY/branches/main")"
+          jq -e --arg sha "$release_sha" \
+            '.name == "main" and .protected == true and .commit.sha == $sha' \
+            <<<"$branch_json" >/dev/null || {
+              echo "::error::The release is not the current protected main SHA."
+              exit 1
+            }
+          ci_json="$(gh api --method GET \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
+            -f head_sha="$release_sha" -f event=push -f branch=main -f per_page=100)"
+          # Do not filter the API to successful runs: a newer pending/failed run
+          # must not be hidden by an older green result for the same source.
+          jq -e --arg sha "$release_sha" --arg repository "$GITHUB_REPOSITORY" \
+            '.workflow_runs | sort_by(.run_number, .id) | last |
+            (.id | type) == "number" and (.run_number | type) == "number" and
+            .head_sha == $sha and .head_branch == "main" and .event == "push" and
+            .path == ".github/workflows/ci.yml" and
+            .head_repository.full_name == $repository and .repository.full_name == $repository and
+            .status == "completed" and .conclusion == "success"' \
+            <<<"$ci_json" >/dev/null || {
+              echo "::error::The latest exact-SHA main push CI run has not succeeded."
+              exit 1
+            }
+
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Verify current main after credential-free publish checkout
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/ci/assert-retired-deploy-sha.mjs "$RELEASE_SHA"
+
+      - name: Download only this run's immutable staged artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.stage.outputs.artifact_id }}
+          path: stage-artifact
+          merge-multiple: true
+
+      - name: Reverify staged build bytes and source
+        env:
+          EXPECTED_ARTIFACT_DIGEST: ${{ needs.stage.outputs.artifact_digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(node scripts/ci/retired-alias-canary.mjs digest stage-artifact/prebuilt)" = "$EXPECTED_ARTIFACT_DIGEST"
+          node scripts/ci/verify-vercel-output.mjs stage-artifact/prebuilt stage-artifact/reviewed-dist
+          node -e 'const i=JSON.parse(require("fs").readFileSync("stage-artifact/release-evidence/single-alias-intent.json"));if(i.sha!==process.env.RELEASE_SHA.toLowerCase()||i.run_id!==process.env.GITHUB_RUN_ID||i.artifact_sha256!==process.env.EXPECTED_ARTIFACT_DIGEST)throw Error("Wrong staged source, run, or artifact")'
+          mkdir publish-evidence
+          cp stage-artifact/release-evidence/*.json publish-evidence/
+
+      - name: Re-enumerate exact provider files and preserve all prior mappings
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export DEPLOYMENT_ID="$(jq -er .deployment_id publish-evidence/single-alias-intent.json)"
+          export DEPLOYMENT_URL="$(jq -er .deployment_url publish-evidence/single-alias-intent.json)"
+          node scripts/ci/capture-vercel-deployment-files.mjs stage-artifact/reviewed-dist stage-artifact/prebuilt "$RUNNER_TEMP/current-deployment-file-inventory.json"
+          cmp --silent publish-evidence/deployment-file-inventory.json "$RUNNER_TEMP/current-deployment-file-inventory.json"
+          node scripts/ci/retired-single-alias.mjs check publish-evidence/single-alias-intent.json
+
+      - name: Verify exact staged bytes and headers without automatic access changes
+        env:
+          # Empty means public-only. A future owner-approved envelope is confined
+          # to this one deployment/source/stage run/publish attempt for <=15 min.
+          RETIRED_ALIAS_CANARY_ACCESS: ${{ secrets.RETIRED_ALIAS_CANARY_ACCESS }}
+        run: >-
+          node scripts/ci/retired-alias-canary.mjs staged
+          publish-evidence/single-alias-intent.json
+          publish-evidence/deployment-file-inventory.json
+          stage-artifact/reviewed-dist "$RUNNER_TEMP/retired-staged-canary"
+          publish-evidence/canary-evidence.json
+
+      - name: Recheck current protected main immediately before arming
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/ci/assert-retired-deploy-sha.mjs "$RELEASE_SHA"
+
+      - name: Arm one alias write with immutable evidence
+        id: arm
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          # Deliberately NO run_attempt: immutable name prevents write retries
+          # after any armed/uncertain attempt, even if the job was interrupted.
+          name: retired-primary-alias-write-armed-${{ github.run_id }}
+          path: publish-evidence
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 90
+
+      - name: Recheck current protected main immediately before the alias write
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/ci/assert-retired-deploy-sha.mjs "$RELEASE_SHA"
+
+      - name: Assign only release-forms.vercel.app once
+        id: assign
+        continue-on-error: true
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          SINGLE_ALIAS_CONFIRMATION: ${{ inputs.confirmation }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/ci/retired-single-alias.mjs assign \
+            publish-evidence/single-alias-intent.json publish-evidence/canary-evidence.json \
+            publish-evidence/alias-attempt.json publish-evidence/alias-result.json
+
+      - name: Always reconcile the target and every sibling after arming
+        id: reconcile
+        if: always() && steps.arm.outcome == 'success'
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: >-
+          node scripts/ci/retired-single-alias.mjs reconcile
+          publish-evidence/single-alias-intent.json publish-evidence/alias-reconciliation.json
+
+      - name: Verify the public target without any bypass
+        if: steps.assign.outcome == 'success' && steps.reconcile.outcome == 'success'
+        run: >-
+          node scripts/ci/retired-alias-canary.mjs public
+          publish-evidence/single-alias-intent.json publish-evidence/deployment-file-inventory.json
+          stage-artifact/reviewed-dist "$RUNNER_TEMP/retired-public-canary"
+          publish-evidence/public-canary-evidence.json
+
+      - name: Require confirmed mutation and public verification
+        if: always() && steps.arm.outcome == 'success'
+        env:
+          ASSIGN_OUTCOME: ${{ steps.assign.outcome }}
+          RECONCILE_OUTCOME: ${{ steps.reconcile.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$ASSIGN_OUTCOME" = success
+          test "$RECONCILE_OUTCOME" = success
+          test -f publish-evidence/public-canary-evidence.json
+
+      - name: Reconcile all mappings again after the public canary
+        if: always() && steps.assign.outcome == 'success' && steps.reconcile.outcome == 'success'
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: >-
+          node scripts/ci/retired-single-alias.mjs reconcile
+          publish-evidence/single-alias-intent.json publish-evidence/final-alias-reconciliation.json
+
+      - name: Retain exact publish evidence without access credentials
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: retired-primary-alias-publish-${{ github.run_id }}-${{ github.run_attempt }}
+          path: publish-evidence
+          if-no-files-found: ignore
+          overwrite: false
+          retention-days: 90
