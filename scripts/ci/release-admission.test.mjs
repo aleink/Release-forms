@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 const root = new URL("../../", import.meta.url);
-const paths = [".github/workflows/deploy-vercel-production.yml"];
+const paths = [".github/workflows/deploy-vercel-production.yml", ".github/workflows/deploy-retired-primary-alias.yml"];
 const sha = "a".repeat(40);
 const otherSha = "b".repeat(40);
 const repository = "fixture/release-repository";
